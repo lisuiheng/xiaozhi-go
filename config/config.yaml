@@ -21,7 +21,7 @@ logging:
   outputs: ["stdout", "/var/log/xiaozhi-go/xiaozhi-go.log"]
 
 audio:
-  sample_rate: 16000  # 采样率（必须与音频输入一致）
+  sample_rate: 24000  # 采样率（必须与音频输入一致）
   channels: 1         # 声道数
   frame_duration: 20  # 帧时长（毫秒）
   silence_timeout: "3s"  # 静音超时（默认值）
