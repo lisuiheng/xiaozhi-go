@@ -3,10 +3,8 @@ package audio
 import (
 	"errors"
 	"fmt"
-	"log/slog"
-	"time"
-
 	"github.com/gordonklaus/portaudio"
+	"log/slog"
 )
 
 // PCMPlayer PortAudio实现的PCM播放器
@@ -21,11 +19,6 @@ type PCMPlayer struct {
 
 // NewPCMPlayer 创建新的PortAudio PCM播放器
 func NewPCMPlayer(sampleRate, frameDuration, channels int, logger *slog.Logger) (*PCMPlayer, error) {
-	devices, _ := portaudio.Devices()
-	for _, dev := range devices {
-		logger.Info("Name: %s, SR: %v, Latency: %v\n",
-			dev.Name, dev.DefaultSampleRate, dev.DefaultLowOutputLatency)
-	}
 	// 初始化PortAudio
 	if err := portaudio.Initialize(); err != nil {
 		return nil, fmt.Errorf("failed to initialize PortAudio: %w", err)
@@ -141,8 +134,6 @@ func (p *PCMPlayer) Play(data []int16) error {
 	select {
 	case p.buffer <- data:
 		return nil
-	case <-time.After(100 * time.Millisecond):
-		return errors.New("audio buffer full")
 	case <-p.done:
 		return errors.New("audio player closed")
 	}

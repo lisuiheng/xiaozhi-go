@@ -23,5 +23,5 @@ logging:
 audio:
   sample_rate: 24000  # 采样率（必须与音频输入一致）
   channels: 1         # 声道数
-  frame_duration: 40  # 帧时长（毫秒）
+  frame_duration: 60  # 帧时长（毫秒）
   silence_timeout: "3s"  # 静音超时（默认值）
