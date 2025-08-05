@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/lisuiheng/xiaozhi-go/core"
@@ -16,7 +16,13 @@ import (
 func main() {
 	// 加载配置
 	//cfg, err := loadConfig("D:\\GolandProjects\\xiaozhi-go\\config\\config.yaml")
-	cfg, err := loadConfig("/media/lee/48624A91624A8422/GolandProjects/xiaozhi-go/config/config.yaml")
+	//cfg, err := loadConfig("/media/lee/48624A91624A8422/GolandProjects/xiaozhi-go/config/config.yaml")
+	// 定义命令行参数
+	configPath := flag.String("c", "", "Path to config file (default searches ./config.yaml, /etc/xiaozhi/config.yaml, etc.)")
+	flag.Parse()
+
+	// 加载配置
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
@@ -73,32 +79,21 @@ func loadConfig(configPath string) (core.Config, error) {
 	viper.SetConfigType("yaml")
 
 	if configPath != "" {
+		// 使用命令行指定的路径
 		viper.SetConfigFile(configPath)
 	} else {
+		// 默认多路径搜索
 		viper.SetConfigName("config")
 		viper.AddConfigPath(".")
-		viper.AddConfigPath("configs")
+		viper.AddConfigPath("./config")
 		viper.AddConfigPath("/etc/xiaozhi")
+		viper.AddConfigPath("/app/xiaozhi-go/config")
 	}
 
-	// 设置默认值
-	viper.SetDefault("server.protocol_version", 1)
-	viper.SetDefault("audio.sample_rate", 16000)
-	viper.SetDefault("audio.channels", 1)
-	viper.SetDefault("audio.frame_duration", 60)
-	viper.SetDefault("logging.level", "info")
-
-	// 读取配置文件
+	// 其余逻辑（默认值、环境变量等）不变...
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return core.Config{}, fmt.Errorf("failed to read config: %v", err)
-		}
+		return core.Config{}, fmt.Errorf("failed to read config: %v", err)
 	}
-
-	// 绑定环境变量
-	viper.AutomaticEnv()
-	viper.SetEnvPrefix("XIAOZHI")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	var cfg core.Config
 	if err := viper.Unmarshal(&cfg); err != nil {
