@@ -1,0 +1,27 @@
+system:
+  exclusive_mode: true  # 是否单向语音流
+  base_path: "/media/lee/48624A91624A8422/GolandProjects/xiaozhi-go/"
+  device_id: "34:cd:b0:b4:1a:24"
+  client_id: "89f47ecc-084b-447b-b78a-139b8ac3a3b6"
+
+  network:
+    transport: "websocket"
+    port: 8084
+    websocket:
+      url: "wss://api.tenclass.net/xiaozhi/v1/"
+      access_token: "your_token_here"
+
+display:
+  fps: 8            # 帧率（默认30）
+  skip_execution: false
+  brightness: 80    # 亮度（默认值）
+
+logging:
+  level: "info"     # debug/info/warn/error
+  outputs: ["stdout", "/var/log/xiaozhi-go/xiaozhi-go.log"]
+
+audio:
+  sample_rate: 24000  # 采样率（必须与音频输入一致）
+  channels: 1         # 声道数
+  frame_duration: 60  # 帧时长（毫秒）
+  silence_timeout: "3s"  # 静音超时（默认值）
