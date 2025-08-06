@@ -618,6 +618,15 @@ func (c *Client) handleTTSMessage(msg map[string]interface{}) error {
 		c.audioCtrl.StopReceiving()
 		c.logger.Info("Stopped audio receiving")
 		c.setState(DeviceStateIdle)
+		if err := c.SendStartListening(ListenModeAuto); err != nil {
+			c.logger.Error("Failed to start auto listening", "error", err)
+		}
+
+		// 启动音频流
+		if err := c.BeginAudioStream(); err != nil {
+			c.logger.Error("Failed to start audio stream", "error", err)
+			return err
+		}
 	case "sentence_start":
 		// 获取并打印句子文本
 		if text, ok := msg["text"].(string); ok {

@@ -61,71 +61,30 @@ func NewPCMPlayer(sampleRate, frameDuration, channels int, logger *slog.Logger) 
 }
 
 func (p *PCMPlayer) audioCallback(out [][]float32) {
-	// 使用局部变量保存剩余数据，避免并发问题
-	var (
-		remaining []int16
-		pos       int
-	)
+	// 计算总共需要处理的样本数（所有通道）
+	totalSamples := len(out) * len(out[0])
+	processed := 0
 
-	// 先处理之前剩余的未播放数据
-	filled := 0
-	for filled < len(out[0]) && pos < len(remaining) {
-		channel := pos % len(out)
-		sample := pos / len(out)
-
-		if sample < len(out[0]) {
-			out[channel][sample] = float32(remaining[pos]) / 32768.0
-			filled++
-			pos++
-		}
-	}
-
-	// 如果还有空间，从channel获取新数据
-	for filled < len(out[0]) {
+	// 处理缓冲区中的数据
+	for processed < totalSamples {
 		select {
-		case data := <-p.buffer:
-			// 重置剩余数据处理位置
-			remaining = data
-			pos = 0
-
-			// 填充新数据
-			for filled < len(out[0]) && pos < len(remaining) {
-				channel := pos % len(out)
-				sample := pos / len(out)
-
-				if sample < len(out[0]) {
-					out[channel][sample] = float32(remaining[pos]) / 32768.0
-					filled++
-					pos++
-				}
+		case chunk := <-p.buffer:
+			// 将int16样本转换为float32并填充到输出缓冲区
+			for i := 0; i < len(chunk) && processed < totalSamples; i++ {
+				channel := processed % len(out)
+				sample := processed / len(out)
+				out[channel][sample] = float32(chunk[i]) / 32768.0
+				processed++
 			}
-
-		case <-p.done:
-			// 收到停止信号，填充静音
-			for i := range out {
-				for j := filled; j < len(out[i]); j++ {
-					out[i][j] = 0
-				}
+		default:
+			// 没有数据可用时填充静音
+			for processed < totalSamples {
+				channel := processed % len(out)
+				sample := processed / len(out)
+				out[channel][sample] = 0
+				processed++
 			}
 			return
-
-		default:
-			// 没有新数据时跳出循环
-			break
-		}
-	}
-
-	// 保存未处理完的数据
-	if pos < len(remaining) {
-		remaining = remaining[pos:]
-	} else {
-		remaining = nil
-	}
-
-	// 填充剩余空间为静音
-	for i := range out {
-		for j := filled; j < len(out[i]); j++ {
-			out[i][j] = 0
 		}
 	}
 }
