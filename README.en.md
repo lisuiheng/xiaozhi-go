@@ -1,11 +1,14 @@
 # xiaozhi-go
 
+
 English | [简体中文](README.md)
 
-## Project Introduction
+## 项目简介
 
-xiaozhi-go is a Golang-based Xiaozhi voice client,. This repository is ported from [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32).
+xiaozhi-go is a Xiaozhi Voice Client implemented in Golang.
 
-## License
+This repository is a port based on[xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)移植
+
+## 许可证
 
 [MIT License](LICENSE)
