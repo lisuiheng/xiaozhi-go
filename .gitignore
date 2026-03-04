@@ -5,6 +5,8 @@
 *.out
 *.test
 
+main
+
 # Go 模块和依赖目录
 /vendor/
 /go.sum
