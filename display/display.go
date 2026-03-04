@@ -171,11 +171,14 @@ func (r *Rotation) Set(value string) error {
 
 // StartAnimation 开始播放动画
 func (dc *DisplayController) StartAnimation(folderPath string, rotation Rotation, fps int, preload bool) error {
+	slog.Info("StartAnimation called", "folderPath", folderPath, "rotation", rotation, "fps", fps, "preload", preload)
+
 	dc.animMutex.Lock()
 	defer dc.animMutex.Unlock()
 
 	// 如果已经是相同的动画，则不中断
 	if dc.currentAnim == folderPath {
+		slog.Info("Animation already running, skipping", "folderPath", folderPath)
 		return nil
 	}
 
@@ -184,7 +187,7 @@ func (dc *DisplayController) StartAnimation(folderPath string, rotation Rotation
 
 	// 中断当前任务
 	if dc.currentTask != nil {
-		slog.Info("中断当前显示任务", "类型", dc.currentTask.taskType)
+		slog.Info("Interrupting current display task", "type", dc.currentTask.taskType)
 		dc.currentTask.cancel()
 		dc.waitTaskDone()
 	}

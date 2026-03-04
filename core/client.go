@@ -391,6 +391,7 @@ func (c *Client) setState(newState DeviceState) {
 			c.audioCtrl.StopSending()
 			c.logger.Debug("Auto-stopped audio sending for speaking state")
 			// 显示说话表情
+			c.logger.Info("Attempting to show speaking emotion")
 			if err := c.ShowEmotion("speaking"); err != nil {
 				c.logger.Warn("Failed to show speaking emotion", "error", err)
 			}
@@ -400,11 +401,13 @@ func (c *Client) setState(newState DeviceState) {
 				c.logger.Warn("Failed to start audio sending when entering listening state")
 			}
 			// 显示聆听表情
+			c.logger.Info("Attempting to show listening emotion")
 			if err := c.ShowEmotion("listening"); err != nil {
 				c.logger.Warn("Failed to show listening emotion", "error", err)
 			}
 		case DeviceStateIdle:
 			// 空闲状态显示中性表情
+			c.logger.Info("Attempting to show neutral emotion")
 			if err := c.ShowEmotion("neutral"); err != nil {
 				c.logger.Debug("Failed to show neutral emotion", "error", err)
 			}
@@ -915,18 +918,33 @@ func (c *Client) SendStartListening(mode ListenMode) error {
 
 // ShowEmotion 显示表情动画
 func (c *Client) ShowEmotion(emotionName string) error {
+	c.logger.Info("ShowEmotion called", "emotion", emotionName)
+
 	if c.config.Display.SkipExecution {
+		c.logger.Warn("Display is disabled, skipping emotion", "emotion", emotionName)
 		return nil
 	}
 
 	// 从配置中获取表情目录路径
 	emotionPath, exists := c.config.Display.EmotionDirs[emotionName]
+	c.logger.Info("Debug - Emotion lookup",
+		"emotion", emotionName,
+		"exists", exists,
+		"path", emotionPath,
+		"all_emotions", c.config.Display.EmotionDirs)
+
 	if !exists {
+		c.logger.Warn("Emotion not found in config", "emotion", emotionName, "available_emotions", c.config.Display.EmotionDirs)
 		return fmt.Errorf("emotion not found: %s", emotionName)
 	}
 
+	c.logger.Info("Starting animation", "emotion", emotionName, "path", emotionPath, "fps", c.config.Display.FPS, "preload", c.config.Display.PreloadImages)
 	rotation := display.Rotation(c.config.Display.Rotation)
-	return c.displayCtrl.StartAnimation(emotionPath, rotation, c.config.Display.FPS, c.config.Display.PreloadImages)
+	err := c.displayCtrl.StartAnimation(emotionPath, rotation, c.config.Display.FPS, c.config.Display.PreloadImages)
+	if err != nil {
+		c.logger.Error("Failed to start animation", "emotion", emotionName, "error", err)
+	}
+	return err
 }
 
 // ShowImage 显示单张图片
