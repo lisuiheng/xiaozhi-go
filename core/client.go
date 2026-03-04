@@ -726,7 +726,8 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 	}
 
 	// 获取表情（可选）
-	emotion := "neutral"
+	// 如果服务器返回了 emotion 字段则使用，否则默认为 thinking（思考中）
+	emotion := "thinking"
 	if e, ok := msg["emotion"].(string); ok {
 		emotion = e
 	}
