@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/lisuiheng/xiaozhi-go/core"
+	"github.com/lisuiheng/xiaozhi-go/input"
 	"github.com/lisuiheng/xiaozhi-go/logger"
 	"github.com/spf13/viper"
 )
@@ -54,6 +55,47 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// 定义键盘动作处理函数
+	handleKeyboardAction := func(action string) {
+		logger.Info("Keyboard action triggered", "action", action)
+		switch action {
+		case "wakeup":
+			// 从 idle 状态唤醒，开始监听
+			if err := client.SendStartListening(core.ListenModeAuto); err != nil {
+				logger.Warn("Failed to start listening", "error", err)
+			} else {
+				logger.Info("Started listening by wakeup")
+			}
+		case "interrupt":
+			// 中断当前操作（说话、思考等），回到空闲状态
+			if err := client.StopListening(); err != nil {
+				logger.Debug("Interrupt current operation", "error", err)
+			} else {
+				logger.Info("Operation interrupted")
+			}
+		case "idle":
+			// 双击按键：强制回到空闲状态
+			if err := client.StopListening(); err != nil {
+				logger.Debug("Stop listening for idle", "error", err)
+			}
+			logger.Info("Forced to idle state by double tap")
+		}
+	}
+
+	// 初始化键盘监听器（可选）
+	var keyboardListener *input.KeyboardListener
+	keyboardDevice := "/dev/input/event0" // 默认键盘设备路径
+	if _, err := os.Stat(keyboardDevice); err == nil {
+		keyboardListener = input.NewKeyboardListener(keyboardDevice, client, handleKeyboardAction)
+		if err := keyboardListener.Start(); err != nil {
+			logger.Warn("Failed to start keyboard listener", "error", err)
+		} else {
+			logger.Info("Keyboard listener started", "device", keyboardDevice)
+		}
+	} else {
+		logger.Info("Keyboard device not found, skipping keyboard input", "device", keyboardDevice)
+	}
+
 	// 启动主服务
 	go func() {
 		logger.Info("Starting xiaozhi service")
@@ -69,6 +111,12 @@ func main() {
 		logger.Info("Received signal, shutting down", "signal", sig)
 	case <-ctx.Done():
 		logger.Info("Context cancelled, shutting down")
+	}
+
+	// 停止键盘监听
+	if keyboardListener != nil && keyboardListener.IsRunning() {
+		logger.Info("Stopping keyboard listener")
+		keyboardListener.Stop()
 	}
 
 	logger.Info("Service shutdown completed")
