@@ -387,13 +387,26 @@ func (c *Client) setState(newState DeviceState) {
 		// 状态转换时的特殊处理
 		switch newState {
 		case DeviceStateSpeaking:
-			// 进入Speaking状态时停止音频发送
+			// 进入 Speaking 状态时停止音频发送
 			c.audioCtrl.StopSending()
 			c.logger.Debug("Auto-stopped audio sending for speaking state")
+			// 显示说话表情
+			if err := c.ShowEmotion("speaking"); err != nil {
+				c.logger.Warn("Failed to show speaking emotion", "error", err)
+			}
 		case DeviceStateListening:
-			// 进入Listening状态时确保可以发送
+			// 进入 Listening 状态时确保可以发送
 			if !c.audioCtrl.StartSending() {
 				c.logger.Warn("Failed to start audio sending when entering listening state")
+			}
+			// 显示聆听表情
+			if err := c.ShowEmotion("listening"); err != nil {
+				c.logger.Warn("Failed to show listening emotion", "error", err)
+			}
+		case DeviceStateIdle:
+			// 空闲状态显示中性表情
+			if err := c.ShowEmotion("neutral"); err != nil {
+				c.logger.Debug("Failed to show neutral emotion", "error", err)
 			}
 		}
 
@@ -713,6 +726,11 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 		"text", text,
 		"emotion", emotion,
 		"session", sessionID)
+
+	// 根据 LLM 返回的表情显示对应的动画
+	if err := c.ShowEmotion(emotion); err != nil {
+		c.logger.Debug("Failed to show emotion", "emotion", emotion, "error", err)
+	}
 
 	// 这里可以添加对LLM响应的进一步处理逻辑
 	// 例如：
