@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lisuiheng/xiaozhi-go/audio"
+	"github.com/lisuiheng/xiaozhi-go/display"
 	"github.com/lisuiheng/xiaozhi-go/pkg/interfaces"
 	"github.com/lisuiheng/xiaozhi-go/protocols/websocket"
 	"log/slog"
@@ -28,6 +29,7 @@ type Client struct {
 	audioStopChan chan struct{}
 	audioDecoder  *audio.OpusDecoder
 	audioPlayer   audio.AudioPlayer
+	displayCtrl   *display.DisplayController
 }
 
 // Config 是客户端配置结构（已调整为匹配YAML文件的结构）
@@ -54,9 +56,17 @@ type Config struct {
 	} `mapstructure:"audio"`
 
 	Display struct {
-		FPS           int  `mapstructure:"fps"`
-		SkipExecution bool `mapstructure:"skip_execution"`
-		Brightness    int  `mapstructure:"brightness"`
+		FPS           int               `mapstructure:"fps"`
+		SkipExecution bool              `mapstructure:"skip_execution"`
+		Brightness    int               `mapstructure:"brightness"`
+		Rotation      int               `mapstructure:"rotation"`
+		PreloadImages bool              `mapstructure:"preload_images"`
+		FontPath      string            `mapstructure:"font_path"`
+		FontSize      float64           `mapstructure:"font_size"`
+		TextAlign     TextAlignConfig   `mapstructure:"text_align"`
+		TimeFormat    string            `mapstructure:"time_format"`
+		DateFormat    string            `mapstructure:"date_format"`
+		EmotionDirs   map[string]string `mapstructure:"emotion_dirs"`
 	} `mapstructure:"display"`
 
 	Logging struct {
@@ -74,6 +84,12 @@ type MQTTUDPConfig struct {
 	BrokerAddress string `mapstructure:"broker_address"`
 	Topic         string `mapstructure:"topic"`
 	QOS           int    `mapstructure:"qos"`
+}
+
+// TextAlignConfig 文本对齐配置
+type TextAlignConfig struct {
+	Horizontal int `mapstructure:"horizontal"`
+	Vertical   int `mapstructure:"vertical"`
 }
 
 // DeviceState 表示设备状态
@@ -143,6 +159,9 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		return nil, fmt.Errorf("failed to create audio player: %w", err)
 	}
 
+	// 初始化显示控制器
+	displayCtrl := display.NewDisplayController()
+
 	return &Client{
 		config:        cfg,
 		state:         DeviceStateUnknown,
@@ -155,6 +174,7 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		audioStopChan: make(chan struct{}),
 		audioDecoder:  decoder,
 		audioPlayer:   player,
+		displayCtrl:   displayCtrl,
 	}, nil
 }
 
@@ -862,7 +882,7 @@ func (c *Client) SendStartListening(mode ListenMode) error {
 		"mode":       mode,
 	}
 
-	// 发送JSON消息
+	// 发送 JSON 消息
 	if err := c.sendJSON(msg); err != nil {
 		return fmt.Errorf("failed to send listen command: %w", err)
 	}
@@ -871,4 +891,73 @@ func (c *Client) SendStartListening(mode ListenMode) error {
 	c.setState(DeviceStateListening)
 	c.logger.Info("Listening started", "mode", mode)
 	return nil
+}
+
+// Display 相关方法
+
+// ShowEmotion 显示表情动画
+func (c *Client) ShowEmotion(emotionName string) error {
+	if c.config.Display.SkipExecution {
+		return nil
+	}
+
+	// 从配置中获取表情目录路径
+	emotionPath, exists := c.config.Display.EmotionDirs[emotionName]
+	if !exists {
+		return fmt.Errorf("emotion not found: %s", emotionName)
+	}
+
+	rotation := display.Rotation(c.config.Display.Rotation)
+	return c.displayCtrl.StartAnimation(emotionPath, rotation, c.config.Display.FPS, c.config.Display.PreloadImages)
+}
+
+// ShowImage 显示单张图片
+func (c *Client) ShowImage(imagePath string) error {
+	if c.config.Display.SkipExecution {
+		return nil
+	}
+
+	rotation := display.Rotation(c.config.Display.Rotation)
+	return c.displayCtrl.ShowImage(imagePath, rotation)
+}
+
+// ShowText 显示文本
+func (c *Client) ShowText(text string, fontSize float64, hAlign, vAlign int) error {
+	if c.config.Display.SkipExecution {
+		return nil
+	}
+
+	color := ColorRGB(255, 255, 255) // 默认白色
+	return c.displayCtrl.ShowText(text, fontSize, color, hAlign, vAlign)
+}
+
+// ShowDateTime 显示日期时间
+func (c *Client) ShowDateTime() error {
+	if c.config.Display.SkipExecution {
+		return nil
+	}
+
+	color := ColorRGB(255, 255, 255)
+	return c.displayCtrl.ShowDateTime(
+		c.config.Display.FontSize,
+		color,
+		c.config.Display.TextAlign.Horizontal,
+		c.config.Display.TextAlign.Vertical,
+		c.config.Display.TimeFormat,
+		c.config.Display.DateFormat,
+	)
+}
+
+// StopDisplay 停止显示
+func (c *Client) StopDisplay() {
+	c.displayCtrl.Stop()
+}
+
+// ColorRGB 创建 RGB 颜色
+func ColorRGB(r, g, b uint8) interface{} {
+	return struct {
+		R uint8
+		G uint8
+		B uint8
+	}{R: r, G: g, B: b}
 }
