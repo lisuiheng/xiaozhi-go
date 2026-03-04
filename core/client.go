@@ -411,10 +411,10 @@ func (c *Client) setState(newState DeviceState) {
 				c.logger.Warn("Failed to show listening emotion", "error", err)
 			}
 		case DeviceStateIdle:
-			// 空闲状态显示晕眩表情
-			c.logger.Info("Attempting to show dizzy emotion")
-			if err := c.ShowEmotion("dizzy"); err != nil {
-				c.logger.Debug("Failed to show dizzy emotion", "error", err)
+			// 空闲状态显示中性表情
+			c.logger.Info("Attempting to show neutral emotion")
+			if err := c.ShowEmotion("neutral"); err != nil {
+				c.logger.Debug("Failed to show neutral emotion", "error", err)
 			}
 		}
 
@@ -726,7 +726,7 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 	}
 
 	// 获取表情（可选）
-	emotion := "dizzy"
+	emotion := "neutral"
 	if e, ok := msg["emotion"].(string); ok {
 		emotion = e
 	}
