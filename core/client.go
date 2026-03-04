@@ -600,9 +600,10 @@ func (c *Client) handleHelloResponse(msg map[string]interface{}) error {
 	c.logger.Info("Received hello response from server", "response", string(jsonData))
 	c.sessionID = msg["session_id"].(string)
 
-	if err := c.SendStartListening(ListenModeAuto); err != nil {
-		c.logger.Error("Failed to start auto listening", "error", err)
-	}
+	// 注释掉自动监听，改为通过 keyboard 触发
+	// if err := c.SendStartListening(ListenModeAuto); err != nil {
+	// 	c.logger.Error("Failed to start auto listening", "error", err)
+	// }
 
 	// 启动音频流
 	if err := c.BeginAudioStream(); err != nil {
