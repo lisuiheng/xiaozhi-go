@@ -1,0 +1,28 @@
+system:
+  exclusive_mode: true  # 是否单向语音流
+  base_path: "/path/to/your/project"
+  # ⚠️ 敏感配置：请复制此文件为 config.yaml 并填入真实的 device_id 和 client_id
+  device_id: "your-device-id-here"
+  client_id: "your-client-id-here"
+
+  network:
+    transport: "websocket"
+    port: 8084
+    websocket:
+      url: "wss://api.tenclass.net/xiaozhi/v1/"
+      access_token: "your_token_here"
+
+display:
+  fps: 8            # 帧率（默认 30）
+  skip_execution: false
+  brightness: 80    # 亮度（默认值）
+
+logging:
+  level: "info"     # debug/info/warn/error
+  outputs: ["stdout", "/var/log/xiaozhi-go/xiaozhi-go.log"]
+
+audio:
+  sample_rate: 24000  # 采样率（必须与音频输入一致）
+  channels: 1         # 声道数
+  frame_duration: 60  # 帧时长（毫秒）
+  silence_timeout: "3s"  # 静音超时（默认值）
