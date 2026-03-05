@@ -1622,6 +1622,12 @@ func (c *Client) handleMCPToolsCall(req MCPRequest) error {
 	}
 
 	// 构建响应
+	// 注意：如果 result 为 nil，说明工具已经自己发送了响应（如音乐播放），不需要再次发送
+	if result == nil && err == nil {
+		c.logger.Debug("Tool has already sent response, skipping MCP response")
+		return nil
+	}
+
 	callResult := ToolsCallResult{
 		Content: []MCPContent{},
 	}
