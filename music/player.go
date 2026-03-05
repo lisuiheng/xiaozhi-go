@@ -455,54 +455,81 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 
 	p.logger.Info("playWithExternalPlayer called", "filePath", filePath, "ext", ext)
 
-	var err error
+	// 最多重试 3 次，每次等待 500ms
+	maxRetries := 3
+	retryDelay := 500 * time.Millisecond
 
-	p.mu.Lock()
-	switch ext {
-	case ".mp3":
-		// 优先使用 ffplay
-		if _, err := exec.LookPath("ffplay"); err == nil {
-			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "warning", filePath)
-			p.logger.Info("Using ffplay for MP3 playback")
-		} else {
-			// 尝试 ffmpeg + aplay
-			_, hasFfmpeg := exec.LookPath("ffmpeg")
-			_, hasAplay := exec.LookPath("aplay")
-			if hasFfmpeg == nil && hasAplay == nil {
-				p.mu.Unlock()
-				p.logger.Info("Using ffmpeg + aplay for MP3 playback")
-				return p.playMp3WithFFmpegAplay(filePath)
-			} else if _, err := exec.LookPath("mpg123"); err == nil {
-				p.cmd = exec.Command("mpg123", filePath)
-				p.logger.Info("Using mpg123 for MP3 playback")
-			} else if _, err := exec.LookPath("madplay"); err == nil {
-				p.cmd = exec.Command("madplay", filePath)
-				p.logger.Info("Using madplay for MP3 playback")
-			} else {
-				p.mu.Unlock()
-				return fmt.Errorf("no MP3 player found (need ffplay, ffmpeg+aplay, mpg123, or madplay)")
-			}
+	for retry := 0; retry < maxRetries; retry++ {
+		if retry > 0 {
+			p.logger.Info("Retrying playback", "attempt", retry+1, "max", maxRetries)
+			time.Sleep(retryDelay)
 		}
-	default:
-		p.cmd = exec.Command("aplay", filePath)
-		p.logger.Info("Using aplay for playback")
-	}
-	p.mu.Unlock()
 
-	p.logger.Info("Starting player command")
+		var err error
 
-	output, err := p.cmd.CombinedOutput()
-	// 打印播放器输出，无论成功与否
-	if len(output) > 0 {
-		p.logger.Info("Player output", "output", string(output))
-	}
-	if err != nil {
-		p.logger.Error("Player command failed", "error", err, "output", string(output))
-		return fmt.Errorf("player failed: %w, output: %s", err, string(output))
+		p.mu.Lock()
+		switch ext {
+		case ".mp3":
+			// 优先使用 ffplay
+			if _, err := exec.LookPath("ffplay"); err == nil {
+				p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "warning", filePath)
+				p.logger.Info("Using ffplay for MP3 playback")
+			} else {
+				// 尝试 ffmpeg + aplay
+				_, hasFfmpeg := exec.LookPath("ffmpeg")
+				_, hasAplay := exec.LookPath("aplay")
+				if hasFfmpeg == nil && hasAplay == nil {
+					p.mu.Unlock()
+					p.logger.Info("Using ffmpeg + aplay for MP3 playback")
+					return p.playMp3WithFFmpegAplay(filePath)
+				} else if _, err := exec.LookPath("mpg123"); err == nil {
+					p.cmd = exec.Command("mpg123", filePath)
+					p.logger.Info("Using mpg123 for MP3 playback")
+				} else if _, err := exec.LookPath("madplay"); err == nil {
+					p.cmd = exec.Command("madplay", filePath)
+					p.logger.Info("Using madplay for MP3 playback")
+				} else {
+					p.mu.Unlock()
+					return fmt.Errorf("no MP3 player found (need ffplay, ffmpeg+aplay, mpg123, or madplay)")
+				}
+			}
+		default:
+			p.cmd = exec.Command("aplay", filePath)
+			p.logger.Info("Using aplay for playback")
+		}
+		p.mu.Unlock()
+
+		p.logger.Info("Starting player command")
+
+		output, err := p.cmd.CombinedOutput()
+		// 打印播放器输出，无论成功与否
+		if len(output) > 0 {
+			p.logger.Info("Player output", "output", string(output))
+		}
+		if err != nil {
+			p.logger.Error("Player command failed", "error", err, "output", string(output))
+			return fmt.Errorf("player failed: %w, output: %s", err, string(output))
+		}
+
+		// 检查输出中是否有设备忙碌错误，如果是则重试
+		outputStr := string(output)
+		if strings.Contains(outputStr, "Device or resource busy") ||
+			strings.Contains(outputStr, "Couldn't open audio device") {
+			p.logger.Warn("Audio device busy, will retry", "attempt", retry+1)
+			continue
+		}
+
+		// 检查其他错误信息
+		if strings.Contains(outputStr, "audio open failed") {
+			p.logger.Error("Player reported audio device error", "output", outputStr)
+			return fmt.Errorf("audio device error: %s", outputStr)
+		}
+
+		p.logger.Info("Player command completed successfully")
+		return nil
 	}
 
-	p.logger.Info("Player command completed successfully")
-	return nil
+	return fmt.Errorf("failed to play audio after %d retries: device busy", maxRetries)
 }
 
 // playMp3WithFFmpegAplay 使用 ffmpeg 解码并通过管道输出到 aplay
