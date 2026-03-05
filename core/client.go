@@ -1171,7 +1171,7 @@ func init() {
 	// 注册获取设备状态工具
 	RegisterMCPTool(
 		"self.get_device_status",
-		"Get the current device status including state and session information",
+		"获取当前设备状态，包括设备状态和会话信息",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -1187,13 +1187,13 @@ func init() {
 	// 注册音量设置工具
 	RegisterMCPTool(
 		"self.audio_speaker.set_volume",
-		"Set the speaker volume (0-100)",
+		"设置扬声器音量（0-100）",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"volume": map[string]interface{}{
 					"type":        "integer",
-					"description": "Volume level (0-100)",
+					"description": "音量值（0-100）",
 					"minimum":     0,
 					"maximum":     100,
 				},
@@ -1209,13 +1209,13 @@ func init() {
 	// 注册显示表情工具
 	RegisterMCPTool(
 		"self.display.show_emotion",
-		"Show an emotion animation on the display",
+		"在显示屏上显示表情动画",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"emotion": map[string]interface{}{
 					"type":        "string",
-					"description": "Emotion name (e.g., neutral, happy, sad, thinking)",
+					"description": "表情名称（如：neutral中立、happy开心、sad悲伤、thinking思考、angry生气、surprised惊讶、dizzy眩晕、blink眨眼）",
 				},
 			},
 			"required": []string{"emotion"},
@@ -1229,17 +1229,17 @@ func init() {
 	// 注册显示文本工具
 	RegisterMCPTool(
 		"self.display.show_text",
-		"Show text on the display",
+		"在显示屏上显示文本",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"text": map[string]interface{}{
 					"type":        "string",
-					"description": "Text to display",
+					"description": "要显示的文本内容",
 				},
 				"font_size": map[string]interface{}{
 					"type":        "number",
-					"description": "Font size",
+					"description": "字体大小",
 					"default":     24,
 				},
 			},
@@ -1253,7 +1253,7 @@ func init() {
 	// 注册显示时间工具
 	RegisterMCPTool(
 		"self.display.show_time",
-		"Show current time on the display",
+		"在显示屏上显示当前时间",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
