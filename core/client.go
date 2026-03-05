@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+
 	"github.com/lisuiheng/xiaozhi-go/audio"
 	"github.com/lisuiheng/xiaozhi-go/display"
 	"github.com/lisuiheng/xiaozhi-go/pkg/interfaces"
@@ -200,8 +202,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.transport = transport
 
 	helloMsg := map[string]interface{}{
-		"type":      "hello",
-		"version":   1,
+		"type":    "hello",
+		"version": 1,
+		"features": map[string]interface{}{
+			"mcp": true,
+		},
 		"transport": c.config.System.Network.Transport,
 		"audio_params": map[string]interface{}{
 			"format":         "opus",
@@ -578,6 +583,8 @@ func (c *Client) handleMessage(msg []byte) error {
 		return c.handleSTTMessage(message)
 	case "llm": // 新增LLM消息处理
 		return c.handleLLMMessage(message)
+	case "mcp": // 新增MCP消息处理
+		return c.handleMCPMessage(message)
 	case "abort":
 		return c.handleAbortMessage(message)
 	case "error":
@@ -1003,4 +1010,563 @@ func ColorRGB(r, g, b uint8) interface{} {
 		G uint8
 		B uint8
 	}{R: r, G: g, B: b}
+}
+
+// ============================================================================
+// MCP (Model Context Protocol) 实现
+// ============================================================================
+
+// MCP 相关常量
+const (
+	MCPProtocolVersion = "2024-11-05"
+	MCPJSONRPCVersion  = "2.0"
+)
+
+// MCPRequest 表示 MCP 请求
+type MCPRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	ID      interface{}     `json:"id,omitempty"`
+}
+
+// MCPResponse 表示 MCP 响应
+type MCPResponse struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *MCPError   `json:"error,omitempty"`
+	ID      interface{} `json:"id,omitempty"`
+}
+
+// MCPError 表示 MCP 错误
+type MCPError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// MCPNotification 表示 MCP 通知（无 id 字段）
+type MCPNotification struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// JSON-RPC 错误码
+const (
+	MCPErrorParseError     = -32700
+	MCPErrorInvalidRequest = -32600
+	MCPErrorMethodNotFound = -32601
+	MCPErrorInvalidParams  = -32602
+	MCPErrorInternalError  = -32603
+)
+
+// InitializeParams 表示 initialize 请求参数
+type InitializeParams struct {
+	Capabilities struct {
+		Vision *struct {
+			URL   string `json:"url"`
+			Token string `json:"token"`
+		} `json:"vision,omitempty"`
+	} `json:"capabilities,omitempty"`
+}
+
+// InitializeResult 表示 initialize 响应结果
+type InitializeResult struct {
+	ProtocolVersion string          `json:"protocolVersion"`
+	Capabilities    MCPCapabilities `json:"capabilities"`
+	ServerInfo      MCPServerInfo   `json:"serverInfo"`
+}
+
+// MCPCapabilities 表示设备能力
+type MCPCapabilities struct {
+	Tools *ToolsCapability `json:"tools,omitempty"`
+}
+
+// ToolsCapability 表示工具能力
+type ToolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// MCPServerInfo 表示服务器信息
+type MCPServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ToolsListResult 表示 tools/list 响应结果
+type ToolsListResult struct {
+	Tools      []MCPTool `json:"tools"`
+	NextCursor string    `json:"nextCursor,omitempty"`
+}
+
+// MCPTool 表示工具定义
+type MCPTool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+// ToolsCallParams 表示 tools/call 请求参数
+type ToolsCallParams struct {
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments,omitempty"`
+}
+
+// ToolsCallResult 表示 tools/call 响应结果
+type ToolsCallResult struct {
+	Content []MCPContent `json:"content"`
+	IsError bool         `json:"isError,omitempty"`
+}
+
+// MCPContent 表示工具执行结果内容
+type MCPContent struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// MCPToolHandler 工具处理函数类型
+type MCPToolHandler func(args map[string]interface{}) (interface{}, error)
+
+// MCPToolRegistry 工具注册表
+type MCPToolRegistry struct {
+	tools    map[string]MCPTool
+	handlers map[string]MCPToolHandler
+}
+
+// mcpRegistry 全局 MCP 工具注册表
+var mcpRegistry = &MCPToolRegistry{
+	tools:    make(map[string]MCPTool),
+	handlers: make(map[string]MCPToolHandler),
+}
+
+// RegisterMCPTool 注册 MCP 工具
+func RegisterMCPTool(name, description string, inputSchema map[string]interface{}, handler MCPToolHandler) {
+	mcpRegistry.tools[name] = MCPTool{
+		Name:        name,
+		Description: description,
+		InputSchema: inputSchema,
+	}
+	mcpRegistry.handlers[name] = handler
+}
+
+// GetMCPTools 获取所有注册的工具
+func GetMCPTools() []MCPTool {
+	tools := make([]MCPTool, 0, len(mcpRegistry.tools))
+	for _, tool := range mcpRegistry.tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+// CallMCPTool 调用工具
+func CallMCPTool(name string, args map[string]interface{}) (interface{}, error) {
+	handler, ok := mcpRegistry.handlers[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown tool: %s", name)
+	}
+	return handler(args)
+}
+
+// init 初始化默认 MCP 工具
+func init() {
+	// 注册获取设备状态工具
+	RegisterMCPTool(
+		"self.get_device_status",
+		"Get the current device status including state and session information",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			// 这个处理器会在 Client 中被替换
+			return map[string]interface{}{
+				"state": "unknown",
+			}, nil
+		},
+	)
+
+	// 注册音量设置工具
+	RegisterMCPTool(
+		"self.audio_speaker.set_volume",
+		"Set the speaker volume (0-100)",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"volume": map[string]interface{}{
+					"type":        "integer",
+					"description": "Volume level (0-100)",
+					"minimum":     0,
+					"maximum":     100,
+				},
+			},
+			"required": []string{"volume"},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			// 默认实现，实际会被替换
+			return true, nil
+		},
+	)
+
+	// 注册显示表情工具
+	RegisterMCPTool(
+		"self.display.show_emotion",
+		"Show an emotion animation on the display",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"emotion": map[string]interface{}{
+					"type":        "string",
+					"description": "Emotion name (e.g., neutral, happy, sad, thinking)",
+				},
+			},
+			"required": []string{"emotion"},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			// 默认实现
+			return true, nil
+		},
+	)
+
+	// 注册显示文本工具
+	RegisterMCPTool(
+		"self.display.show_text",
+		"Show text on the display",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"text": map[string]interface{}{
+					"type":        "string",
+					"description": "Text to display",
+				},
+				"font_size": map[string]interface{}{
+					"type":        "number",
+					"description": "Font size",
+					"default":     24,
+				},
+			},
+			"required": []string{"text"},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册显示时间工具
+	RegisterMCPTool(
+		"self.display.show_time",
+		"Show current time on the display",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+}
+
+// handleMCPMessage 处理 MCP 消息
+func (c *Client) handleMCPMessage(msg map[string]interface{}) error {
+	payload, ok := msg["payload"].(map[string]interface{})
+	if !ok {
+		return errors.New("MCP message missing payload field")
+	}
+
+	// 解析 MCP 请求
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	var mcpReq MCPRequest
+	if err := json.Unmarshal(payloadBytes, &mcpReq); err != nil {
+		return c.sendMCPError(mcpReq.ID, MCPErrorParseError, "Parse error", nil)
+	}
+
+	// 验证 JSONRPC 版本
+	if mcpReq.JSONRPC != MCPJSONRPCVersion {
+		return c.sendMCPError(mcpReq.ID, MCPErrorInvalidRequest, "Invalid JSON-RPC version", nil)
+	}
+
+	c.logger.Info("Received MCP request", "method", mcpReq.Method, "id", mcpReq.ID)
+
+	// 根据方法分发处理
+	switch mcpReq.Method {
+	case "initialize":
+		return c.handleMCPInitialize(mcpReq)
+	case "tools/list":
+		return c.handleMCPToolsList(mcpReq)
+	case "tools/call":
+		return c.handleMCPToolsCall(mcpReq)
+	case "notifications/initialized":
+		// 这是一个通知，不需要响应
+		c.logger.Info("MCP session initialized")
+		return nil
+	default:
+		return c.sendMCPError(mcpReq.ID, MCPErrorMethodNotFound, fmt.Sprintf("Method not found: %s", mcpReq.Method), nil)
+	}
+}
+
+// handleMCPInitialize 处理 initialize 请求
+func (c *Client) handleMCPInitialize(req MCPRequest) error {
+	// 解析参数（可选）
+	var params InitializeParams
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return c.sendMCPError(req.ID, MCPErrorInvalidParams, "Invalid params", err.Error())
+		}
+	}
+
+	// 如果有视觉能力配置，可以保存
+	if params.Capabilities.Vision != nil {
+		c.logger.Info("Received vision capability",
+			"url", params.Capabilities.Vision.URL)
+	}
+
+	// 构建响应
+	result := InitializeResult{
+		ProtocolVersion: MCPProtocolVersion,
+		Capabilities: MCPCapabilities{
+			Tools: &ToolsCapability{
+				ListChanged: false,
+			},
+		},
+		ServerInfo: MCPServerInfo{
+			Name:    "xiaozhi-go",
+			Version: "1.0.0",
+		},
+	}
+
+	return c.sendMCPResponse(req.ID, result)
+}
+
+// handleMCPToolsList 处理 tools/list 请求
+func (c *Client) handleMCPToolsList(req MCPRequest) error {
+	// 解析参数获取 cursor（用于分页，暂不支持）
+	cursor := ""
+	if len(req.Params) > 0 {
+		var params struct {
+			Cursor string `json:"cursor"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err == nil {
+			cursor = params.Cursor
+		}
+	}
+
+	// 如果有 cursor，说明需要分页（暂不支持）
+	if cursor != "" {
+		return c.sendMCPResponse(req.ID, ToolsListResult{
+			Tools:      []MCPTool{},
+			NextCursor: "",
+		})
+	}
+
+	// 返回所有工具
+	tools := GetMCPTools()
+
+	c.logger.Info("Returning tools list", "count", len(tools))
+
+	return c.sendMCPResponse(req.ID, ToolsListResult{
+		Tools:      tools,
+		NextCursor: "",
+	})
+}
+
+// handleMCPToolsCall 处理 tools/call 请求
+func (c *Client) handleMCPToolsCall(req MCPRequest) error {
+	// 解析参数
+	var params ToolsCallParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return c.sendMCPError(req.ID, MCPErrorInvalidParams, "Invalid params", err.Error())
+	}
+
+	c.logger.Info("Calling tool", "name", params.Name, "arguments", params.Arguments)
+
+	// 执行工具
+	var result interface{}
+	var err error
+
+	switch params.Name {
+	case "self.get_device_status":
+		result = c.getDeviceStatus()
+	case "self.audio_speaker.set_volume":
+		result, err = c.setVolume(params.Arguments)
+	case "self.display.show_emotion":
+		result, err = c.showEmotionTool(params.Arguments)
+	case "self.display.show_text":
+		result, err = c.showTextTool(params.Arguments)
+	case "self.display.show_time":
+		result, err = c.showTimeTool(params.Arguments)
+	default:
+		// 尝试从注册表调用
+		result, err = CallMCPTool(params.Name, params.Arguments)
+	}
+
+	// 构建响应
+	callResult := ToolsCallResult{
+		Content: []MCPContent{},
+	}
+
+	if err != nil {
+		callResult.IsError = true
+		callResult.Content = append(callResult.Content, MCPContent{
+			Type: "text",
+			Text: err.Error(),
+		})
+	} else {
+		// 将结果转换为 JSON 文本
+		resultBytes, jsonErr := json.Marshal(result)
+		if jsonErr != nil {
+			callResult.Content = append(callResult.Content, MCPContent{
+				Type: "text",
+				Text: fmt.Sprintf("%v", result),
+			})
+		} else {
+			callResult.Content = append(callResult.Content, MCPContent{
+				Type: "text",
+				Text: string(resultBytes),
+			})
+		}
+	}
+
+	return c.sendMCPResponse(req.ID, callResult)
+}
+
+// getDeviceStatus 获取设备状态
+func (c *Client) getDeviceStatus() map[string]interface{} {
+	status := c.GetStatus()
+	return map[string]interface{}{
+		"state":             string(status.State),
+		"session_id":        status.SessionID,
+		"connection_status": status.ConnectionStatus,
+	}
+}
+
+// setVolume 设置音量
+func (c *Client) setVolume(args map[string]interface{}) (interface{}, error) {
+	volume, ok := args["volume"].(float64)
+	if !ok {
+		return nil, errors.New("volume must be a number")
+	}
+
+	// 转换为整数
+	volumeInt := int(volume)
+	if volumeInt < 0 || volumeInt > 100 {
+		return nil, errors.New("volume must be between 0 and 100")
+	}
+
+	// 使用 amixer 设置音量
+	cmd := exec.Command("amixer", "set", "Power Amplifier", fmt.Sprintf("%d%%", volumeInt))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		c.logger.Error("Failed to set volume", "error", err, "output", string(output))
+		return nil, fmt.Errorf("failed to set volume: %w", err)
+	}
+
+	c.logger.Info("Volume set successfully", "volume", volumeInt)
+
+	return true, nil
+}
+
+// showEmotionTool 显示表情工具
+func (c *Client) showEmotionTool(args map[string]interface{}) (interface{}, error) {
+	emotion, ok := args["emotion"].(string)
+	if !ok {
+		return nil, errors.New("emotion must be a string")
+	}
+
+	if err := c.ShowEmotion(emotion); err != nil {
+		return nil, err
+	}
+
+	return true, nil
+}
+
+// showTextTool 显示文本工具
+func (c *Client) showTextTool(args map[string]interface{}) (interface{}, error) {
+	text, ok := args["text"].(string)
+	if !ok {
+		return nil, errors.New("text must be a string")
+	}
+
+	fontSize := c.config.Display.FontSize
+	if fs, ok := args["font_size"].(float64); ok {
+		fontSize = fs
+	}
+
+	if err := c.ShowText(text, fontSize, c.config.Display.TextAlign.Horizontal, c.config.Display.TextAlign.Vertical); err != nil {
+		return nil, err
+	}
+
+	return true, nil
+}
+
+// showTimeTool 显示时间工具
+func (c *Client) showTimeTool(args map[string]interface{}) (interface{}, error) {
+	if err := c.ShowDateTime(); err != nil {
+		return nil, err
+	}
+	return true, nil
+}
+
+// sendMCPResponse 发送 MCP 响应
+func (c *Client) sendMCPResponse(id interface{}, result interface{}) error {
+	response := MCPResponse{
+		JSONRPC: MCPJSONRPCVersion,
+		Result:  result,
+		ID:      id,
+	}
+
+	return c.sendMCPMessage(response)
+}
+
+// sendMCPError 发送 MCP 错误响应
+func (c *Client) sendMCPError(id interface{}, code int, message string, data interface{}) error {
+	response := MCPResponse{
+		JSONRPC: MCPJSONRPCVersion,
+		Error: &MCPError{
+			Code:    code,
+			Message: message,
+			Data:    data,
+		},
+		ID: id,
+	}
+
+	return c.sendMCPMessage(response)
+}
+
+// sendMCPMessage 发送 MCP 消息
+func (c *Client) sendMCPMessage(response interface{}) error {
+	msg := map[string]interface{}{
+		"session_id": c.sessionID,
+		"type":       "mcp",
+		"payload":    response,
+	}
+
+	return c.sendJSON(msg)
+}
+
+// SendMCPNotification 发送 MCP 通知
+func (c *Client) SendMCPNotification(method string, params interface{}) error {
+	notification := MCPNotification{
+		JSONRPC: MCPJSONRPCVersion,
+		Method:  method,
+	}
+
+	if params != nil {
+		paramsBytes, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to marshal notification params: %w", err)
+		}
+		notification.Params = paramsBytes
+	}
+
+	msg := map[string]interface{}{
+		"session_id": c.sessionID,
+		"type":       "mcp",
+		"payload":    notification,
+	}
+
+	return c.sendJSON(msg)
 }
