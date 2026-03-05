@@ -1885,15 +1885,30 @@ func (c *Client) disconnectForMusic() {
 		}
 	}
 
-	// 停止音频发送
+	// 停止音频发送和接收
 	c.audioCtrl.StopSending()
 	c.audioCtrl.StopReceiving()
 
 	// 停止音频采集
 	c.StopAudioCapture()
 
-	// 不关闭 audioPlayer，只是停止接收
-	// 注意：不要调用 c.audioPlayer.Close()，否则无法恢复
+	// 关闭音频播放器，释放 PortAudio 设备
+	// 注意：必须关闭播放器以释放音频输出设备，否则 ffplay 无法打开设备
+	if c.audioPlayer != nil {
+		if err := c.audioPlayer.Close(); err != nil {
+			c.logger.Warn("Failed to close audio player", "error", err)
+		}
+		c.audioPlayer = nil
+	}
+
+	// 关闭音频解码器，释放 OPUS 资源
+	if c.audioDecoder != nil {
+		c.audioDecoder.Close()
+		c.audioDecoder = nil
+	}
+
+	// 注意：audioRecorder 和 audioCtrl 不需要显式关闭
+	// 因为 StopAudioCapture 已经停止了录音上下文，malgo 设备会自动释放
 
 	// 关闭 WebSocket 连接
 	if c.transport != nil {
@@ -1909,8 +1924,8 @@ func (c *Client) disconnectForMusic() {
 	c.sessionID = ""
 	c.stateMutex.Unlock()
 
-	// 等待音频设备完全释放（增加等待时间，确保设备释放）
-	// 音乐播放需要独占音频设备，所以需要等待足够的时间让前一个音频流完全关闭
+	// 等待音频设备完全释放
+	// 确保所有音频资源（PortAudio、malgo）都被系统回收
 	time.Sleep(2 * time.Second)
 
 	c.logger.Info("Disconnected for music playback, audio device released")
@@ -1926,6 +1941,30 @@ func (c *Client) reconnectAfterMusic() {
 	// 显示默认表情
 	if err := c.ShowEmotion("neutral"); err != nil {
 		c.logger.Warn("Failed to show neutral emotion after music", "error", err)
+	}
+
+	// 重新初始化音频播放器
+	var err error
+	c.audioPlayer, err = audio.NewPCMPlayer(
+		c.config.Audio.SampleRate,
+		c.config.Audio.FrameDuration,
+		c.config.Audio.Channels,
+		c.logger,
+	)
+	if err != nil {
+		c.logger.Error("Failed to recreate audio player", "error", err)
+		return
+	}
+
+	// 重新初始化音频解码器
+	c.audioDecoder, err = audio.NewOpusDecoder(
+		c.config.Audio.SampleRate,
+		c.config.Audio.Channels,
+		c.logger,
+	)
+	if err != nil {
+		c.logger.Error("Failed to recreate audio decoder", "error", err)
+		return
 	}
 
 	// 重新建立 WebSocket 连接
