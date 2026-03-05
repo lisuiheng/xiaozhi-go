@@ -275,7 +275,12 @@ func (p *Player) playLoop() {
 			p.mu.Unlock()
 
 			if err := p.playFileWithVisualize(song.Path); err != nil {
-				p.logger.Warn("Failed to play song", "song", song.Name, "error", err)
+				p.logger.Warn("Failed to play song, stopping playback", "song", song.Name, "error", err)
+				// 播放失败时停止，不继续重试
+				p.mu.Lock()
+				p.playing = false
+				p.mu.Unlock()
+				return
 			}
 
 			p.mu.Lock()
@@ -440,13 +445,16 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
-		if _, err := exec.LookPath("madplay"); err == nil {
-			p.cmd = exec.Command("madplay", "-q", filePath)
+		// 优先使用 ffplay（ffmpeg 的一部分），更稳定
+		if _, err := exec.LookPath("ffplay"); err == nil {
+			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filePath)
 		} else if _, err := exec.LookPath("mpg123"); err == nil {
 			p.cmd = exec.Command("mpg123", "-q", filePath)
+		} else if _, err := exec.LookPath("madplay"); err == nil {
+			p.cmd = exec.Command("madplay", "-q", filePath)
 		} else {
 			p.mu.Unlock()
-			return fmt.Errorf("no MP3 player found")
+			return fmt.Errorf("no MP3 player found (need ffplay, mpg123, or madplay)")
 		}
 	default:
 		p.cmd = exec.Command("aplay", filePath)
