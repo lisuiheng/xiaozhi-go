@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gen2brain/malgo"
@@ -87,32 +88,46 @@ func (r *recorder) Record(ctx context.Context, dataChan chan<- []byte) error {
 	deviceConfig.PeriodSizeInFrames = uint32(frameSize)
 
 	// 创建捕获回调
+	var callbackMu sync.Mutex
+	stopped := false
+
 	captureCallback := func(_, pcmData []byte, _ uint32) {
+		// 使用 mutex 保护，确保在停止后不再处理
+		callbackMu.Lock()
+		if stopped {
+			callbackMu.Unlock()
+			return
+		}
+		callbackMu.Unlock()
+
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			//// 1. 先将原始PCM数据写入文件
-			//if _, err := pcmFile.Write(pcmData); err != nil {
-			//	r.logger.Error("Failed to write PCM data", "error", err)
-			//}
+		}
 
-			// PCM数据转换
-			pcm := bytesToInt16(pcmData) // 需要实现这个辅助函数
+		// PCM数据转换
+		pcm := bytesToInt16(pcmData)
 
-			// 使用opus_codec.go的Encode方法
-			opusData, err := r.opusEncoder.Encode(pcm)
-			if err != nil {
-				r.logger.Error("OPUS encode failed", "error", err)
-				return
+		// 使用opus_codec.go的Encode方法
+		opusData, err := r.opusEncoder.Encode(pcm)
+		if err != nil {
+			r.logger.Error("OPUS encode failed", "error", err)
+			return
+		}
+
+		// 使用 recover 防止向已关闭的 channel 发送数据
+		defer func() {
+			if rec := recover(); rec != nil {
+				r.logger.Debug("Recovered from send on closed channel")
 			}
+		}()
 
-			select {
-			case dataChan <- opusData:
-			case <-time.After(100 * time.Millisecond):
-				r.logger.Warn("Audio channel blocked, dropping frame")
-			case <-ctx.Done():
-			}
+		select {
+		case dataChan <- opusData:
+		case <-time.After(100 * time.Millisecond):
+			r.logger.Warn("Audio channel blocked, dropping frame")
+		case <-ctx.Done():
 		}
 	}
 
@@ -138,6 +153,12 @@ func (r *recorder) Record(ctx context.Context, dataChan chan<- []byte) error {
 
 	// 等待上下文取消
 	<-ctx.Done()
+
+	// 标记回调停止，防止后续发送
+	callbackMu.Lock()
+	stopped = true
+	callbackMu.Unlock()
+
 	r.logger.Info("Audio recording stopped")
 	return nil
 }

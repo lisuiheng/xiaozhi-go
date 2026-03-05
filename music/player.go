@@ -460,7 +460,7 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
-		// 优先使用 ffplay（最可靠）
+		// 优先使用 ffplay
 		if _, err := exec.LookPath("ffplay"); err == nil {
 			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", filePath)
 			p.logger.Info("Using ffplay for MP3 playback")

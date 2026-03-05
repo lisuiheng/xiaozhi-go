@@ -917,11 +917,9 @@ func (c *Client) startAudioCapture() {
 
 	// 创建音频数据通道
 	audioDataChan := make(chan []byte, 100)
-	defer close(audioDataChan)
 
 	// 启动音频采集
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go func() {
 		if err := c.audioRecorder.Record(ctx, audioDataChan); err != nil {
@@ -934,9 +932,15 @@ func (c *Client) startAudioCapture() {
 		select {
 		case <-c.closeChan:
 			c.logger.Info("Stopping audio capture due to client shutdown")
+			cancel()                           // 先取消 context，让 recorder 停止
+			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
+			close(audioDataChan)
 			return
 		case <-c.audioStopChan:
 			c.logger.Info("Stopping audio capture")
+			cancel()                           // 先取消 context，让 recorder 停止
+			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
+			close(audioDataChan)
 			return
 		case data, ok := <-audioDataChan:
 			if !ok {
@@ -1886,10 +1890,8 @@ func (c *Client) disconnectForMusic() {
 	// 停止音频采集
 	c.StopAudioCapture()
 
-	// 关闭音频播放器
-	if c.audioPlayer != nil {
-		c.audioPlayer.Close()
-	}
+	// 不关闭 audioPlayer，只是停止接收
+	// 注意：不要调用 c.audioPlayer.Close()，否则无法恢复
 
 	// 关闭 WebSocket 连接
 	if c.transport != nil {
@@ -1904,6 +1906,9 @@ func (c *Client) disconnectForMusic() {
 	c.state = DeviceStateIdle
 	c.sessionID = ""
 	c.stateMutex.Unlock()
+
+	// 等待音频设备完全释放
+	time.Sleep(500 * time.Millisecond)
 
 	c.logger.Info("Disconnected for music playback, audio device released")
 }
