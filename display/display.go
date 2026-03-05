@@ -15,6 +15,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1056,5 +1057,203 @@ func getRotatedPixel(x, y, width, height int, rotation Rotation) (outX, outY int
 		return y, width - 1 - x
 	default:
 		return x, y
+	}
+}
+
+// ============================================================================
+// 音乐可视化显示
+// ============================================================================
+
+// ShowMusicVisualizer 显示音乐可视化效果
+func (dc *DisplayController) ShowMusicVisualizer(levelChan <-chan float64, songName string, color interface{}) error {
+	dc.taskMutex.Lock()
+	defer dc.taskMutex.Unlock()
+
+	// 中断当前任务
+	if dc.currentTask != nil {
+		slog.Info("Interrupting current display task", "type", dc.currentTask.taskType)
+		dc.currentTask.cancel()
+		dc.waitTaskDone()
+	}
+
+	// 清屏
+	dc.clearScreen()
+
+	// 清除动画记录
+	dc.animMutex.Lock()
+	dc.currentAnim = ""
+	dc.animMutex.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	dc.currentTask = &taskContext{
+		ctx:      ctx,
+		cancel:   cancel,
+		taskType: "music_visualizer",
+		done:     make(chan struct{}),
+	}
+
+	go func() {
+		defer close(dc.currentTask.done)
+		dc.runMusicVisualizer(ctx, levelChan, songName, color)
+	}()
+
+	return nil
+}
+
+// runMusicVisualizer 音乐可视化显示实现
+func (dc *DisplayController) runMusicVisualizer(ctx context.Context, levelChan <-chan float64, songName string, colorValue interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("音乐可视化 panic 恢复", "错误", r)
+		}
+	}()
+
+	if ctx.Err() != nil {
+		slog.Info("音乐可视化在开始前已被取消")
+		return
+	}
+
+	if err := dc.initFramebuffer(); err != nil {
+		slog.Error("初始化帧缓冲失败", "错误", err)
+		return
+	}
+	defer dc.closeFramebuffer()
+
+	// 波形条数量
+	barCount := 16
+	barWidth := fbWidth / barCount
+	barMaxHeight := fbHeight * 2 / 3
+
+	// 波形条高度历史（用于平滑过渡）
+	bars := make([]float64, barCount)
+	targetBars := make([]float64, barCount)
+
+	// 颜色
+	var col struct{ R, G, B uint8 }
+	switch v := colorValue.(type) {
+	case struct{ R, G, B uint8 }:
+		col = v
+	default:
+		col = struct{ R, G, B uint8 }{R: 0, G: 200, B: 255} // 默认青色
+	}
+
+	// 动画帧率
+	ticker := time.NewTicker(33 * time.Millisecond) // ~30 FPS
+	defer ticker.Stop()
+
+	phase := 0.0
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("音乐可视化被中断")
+			return
+		case level, ok := <-levelChan:
+			if !ok {
+				// 通道关闭，退出
+				return
+			}
+			// 更新目标波形高度
+			dc.updateTargetBars(targetBars, level, &phase)
+		case <-ticker.C:
+			// 清空后台缓冲
+			for i := range dbuffer.backBuffer {
+				dbuffer.backBuffer[i] = 0
+			}
+
+			// 平滑过渡
+			dc.smoothBars(bars, targetBars, 0.3)
+
+			// 绘制波形
+			dc.drawWaveformBars(bars, barWidth, barMaxHeight, col)
+
+			// 等待垂直同步并交换缓冲
+			dc.waitForVSync()
+			copy(dbuffer.frontBuffer, dbuffer.backBuffer)
+			copy(fbData, dbuffer.frontBuffer)
+		}
+	}
+}
+
+// updateTargetBars 更新目标波形高度
+func (dc *DisplayController) updateTargetBars(bars []float64, level float64, phase *float64) {
+	barCount := len(bars)
+
+	// 使用音频级别和相位生成波形效果
+	*phase += 0.15
+
+	for i := 0; i < barCount; i++ {
+		// 生成波形效果：中心高，两边低，随音量变化
+		center := float64(barCount) / 2
+		distance := math.Abs(float64(i) - center)
+		decay := 1.0 - (distance/center)*0.6
+
+		// 添加波动效果
+		wave := math.Sin(*phase+float64(i)*0.5)*0.3 + 0.7
+
+		// 目标高度
+		targetHeight := level * decay * wave
+		if targetHeight > 1.0 {
+			targetHeight = 1.0
+		}
+		bars[i] = targetHeight
+	}
+}
+
+// smoothBars 平滑波形过渡
+func (dc *DisplayController) smoothBars(bars, targetBars []float64, smoothFactor float64) {
+	for i := range bars {
+		// 线性插值平滑
+		bars[i] = bars[i] + (targetBars[i]-bars[i])*smoothFactor
+	}
+}
+
+// drawWaveformBars 绘制波形条
+func (dc *DisplayController) drawWaveformBars(bars []float64, barWidth, maxHeight int, col struct{ R, G, B uint8 }) {
+	barCount := len(bars)
+	spacing := 2 // 条间距
+
+	for i := 0; i < barCount; i++ {
+		height := int(bars[i] * float64(maxHeight))
+		if height < 2 {
+			height = 2
+		}
+
+		x := i*barWidth + spacing/2
+		barW := barWidth - spacing
+		if barW < 1 {
+			barW = 1
+		}
+
+		// 从底部开始绘制
+		yStart := fbHeight - height
+
+		// 绘制渐变色波形条
+		for y := yStart; y < fbHeight; y++ {
+			// 渐变效果：顶部亮，底部暗
+			progress := float64(y-yStart) / float64(height)
+			r := uint8(float64(col.R) * (0.5 + 0.5*progress))
+			g := uint8(float64(col.G) * (0.5 + 0.5*progress))
+			b := uint8(float64(col.B) * (0.5 + 0.5*progress))
+
+			for dx := 0; dx < barW; dx++ {
+				fbX := x + dx
+				if fbX < 0 || fbX >= fbWidth {
+					continue
+				}
+
+				offset := y*lineLength + fbX*(bpp/8)
+				switch bpp {
+				case 16:
+					color := uint16(r>>3)<<11 | uint16(g>>2)<<5 | uint16(b>>3)
+					binary.LittleEndian.PutUint16(dbuffer.backBuffer[offset:], color)
+				case 32:
+					dbuffer.backBuffer[offset] = b
+					dbuffer.backBuffer[offset+1] = g
+					dbuffer.backBuffer[offset+2] = r
+					dbuffer.backBuffer[offset+3] = 0xFF
+				}
+			}
+		}
 	}
 }

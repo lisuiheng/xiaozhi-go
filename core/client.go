@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/lisuiheng/xiaozhi-go/audio"
 	"github.com/lisuiheng/xiaozhi-go/display"
+	"github.com/lisuiheng/xiaozhi-go/music"
 	"github.com/lisuiheng/xiaozhi-go/pkg/interfaces"
 	"github.com/lisuiheng/xiaozhi-go/protocols/websocket"
 	"log/slog"
@@ -22,7 +24,8 @@ type DisplayMode string
 const (
 	DisplayModeEmotion DisplayMode = "emotion" // 默认模式，显示表情
 	DisplayModeClock   DisplayMode = "clock"   // 时钟模式，显示时间
-	DisplayModeText    DisplayMode = "text"    // 对话模式，显示文字
+	DisplayModeDialog  DisplayMode = "dialog"  // 对话模式，显示对话
+	DisplayModeMusic   DisplayMode = "music"   // 音乐模式，显示音乐信息
 )
 
 type Client struct {
@@ -46,6 +49,13 @@ type Client struct {
 	// 显示模式管理
 	displayMode   DisplayMode
 	displayModeMu sync.RWMutex
+
+	// 对话模式缓冲区
+	dialogBuffer   []string
+	dialogBufferMu sync.Mutex
+
+	// 音乐播放器
+	musicPlayer *music.Player
 }
 
 // Config 是客户端配置结构（已调整为匹配YAML文件的结构）
@@ -84,6 +94,14 @@ type Config struct {
 		DateFormat    string            `mapstructure:"date_format"`
 		EmotionDirs   map[string]string `mapstructure:"emotion_dirs"`
 	} `mapstructure:"display"`
+
+	Music struct {
+		Enabled          bool     `mapstructure:"enabled"`
+		MusicPath        string   `mapstructure:"music_path"`
+		SupportedFormats []string `mapstructure:"supported_formats"`
+		AnimationPath    string   `mapstructure:"animation_path"`
+		ShowSongName     bool     `mapstructure:"show_song_name"`
+	} `mapstructure:"music"`
 
 	Logging struct {
 		Level   string   `mapstructure:"level"`
@@ -178,6 +196,15 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 	// 初始化显示控制器
 	displayCtrl := display.NewDisplayController()
 
+	// 初始化音乐播放器
+	var musicPlayer *music.Player
+	if cfg.Music.Enabled {
+		musicPlayer = music.NewPlayer(cfg.Music.MusicPath, cfg.Music.SupportedFormats, log)
+		if err := musicPlayer.LoadSongs(); err != nil {
+			log.Warn("Failed to load music", "error", err)
+		}
+	}
+
 	return &Client{
 		config:        cfg,
 		state:         DeviceStateUnknown,
@@ -191,7 +218,8 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		audioDecoder:  decoder,
 		audioPlayer:   player,
 		displayCtrl:   displayCtrl,
-		displayMode:   DisplayModeEmotion, // 默认为表情模式
+		displayMode:   DisplayModeEmotion,
+		musicPlayer:   musicPlayer,
 	}, nil
 }
 
@@ -735,6 +763,12 @@ func (c *Client) handleSTTMessage(msg map[string]interface{}) error {
 	c.logger.Info("STT result received",
 		"text", text,
 		"session", sessionID)
+
+	// 在对话模式下，显示用户的语音
+	if c.GetDisplayMode() == DisplayModeDialog {
+		c.appendDialog("我", text)
+	}
+
 	return nil
 }
 
@@ -752,7 +786,6 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 	}
 
 	// 获取表情（可选）
-	// 如果服务器返回了 emotion 字段则使用，否则默认为 thinking（思考中）
 	emotion := "thinking"
 	if e, ok := msg["emotion"].(string); ok {
 		emotion = e
@@ -763,12 +796,17 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 		"emotion", emotion,
 		"session", sessionID)
 
-	// 只在表情模式下才更新表情
-	if c.GetDisplayMode() == DisplayModeEmotion {
+	// 根据显示模式处理
+	switch c.GetDisplayMode() {
+	case DisplayModeEmotion:
+		// 表情模式：只更新表情
 		if err := c.ShowEmotion(emotion); err != nil {
 			c.logger.Debug("Failed to show emotion", "emotion", emotion, "error", err)
 		}
-	} else {
+	case DisplayModeDialog:
+		// 对话模式：显示AI回复
+		c.appendDialog("AI", text)
+	default:
 		c.logger.Debug("Not in emotion mode, skipping emotion update", "currentMode", c.GetDisplayMode())
 	}
 
@@ -995,16 +1033,50 @@ func (c *Client) SetDisplayMode(mode DisplayMode) {
 	c.displayMode = mode
 	c.displayModeMu.Unlock()
 	c.logger.Info("Display mode changed", "mode", mode)
+
+	// 切换到对话模式时清空对话缓冲区
+	if mode == DisplayModeDialog {
+		c.clearDialog()
+	}
 }
 
-// ShowText 显示文本（切换到文字模式）
+// appendDialog 添加对话内容并更新显示
+func (c *Client) appendDialog(speaker, text string) {
+	c.dialogBufferMu.Lock()
+	defer c.dialogBufferMu.Unlock()
+
+	// 添加对话，最多保留 4 条
+	c.dialogBuffer = append(c.dialogBuffer, fmt.Sprintf("[%s] %s", speaker, text))
+	if len(c.dialogBuffer) > 4 {
+		c.dialogBuffer = c.dialogBuffer[len(c.dialogBuffer)-4:]
+	}
+
+	// 更新显示
+	dialogText := strings.Join(c.dialogBuffer, "\n")
+	c.logger.Info("Dialog display updated", "text", dialogText)
+
+	// 在后台线程更新显示，避免阻塞
+	go func() {
+		color := ColorRGB(255, 255, 255)
+		if err := c.displayCtrl.ShowText(dialogText, c.config.Display.FontSize, color,
+			c.config.Display.TextAlign.Horizontal, c.config.Display.TextAlign.Vertical); err != nil {
+			c.logger.Warn("Failed to update dialog display", "error", err)
+		}
+	}()
+}
+
+// clearDialog 清空对话缓冲区
+func (c *Client) clearDialog() {
+	c.dialogBufferMu.Lock()
+	defer c.dialogBufferMu.Unlock()
+	c.dialogBuffer = nil
+}
+
+// ShowText 显示文本（不切换模式，仅显示）
 func (c *Client) ShowText(text string, fontSize float64, hAlign, vAlign int) error {
 	if c.config.Display.SkipExecution {
 		return nil
 	}
-
-	// 切换到文字模式
-	c.SetDisplayMode(DisplayModeText)
 
 	color := ColorRGB(255, 255, 255)
 	return c.displayCtrl.ShowText(text, fontSize, color, hAlign, vAlign)
@@ -1305,14 +1377,14 @@ func init() {
 	// 注册切换显示模式工具
 	RegisterMCPTool(
 		"self.display.set_mode",
-		"切换显示模式：emotion(默认表情模式)、clock(时钟模式)、text(文字模式)",
+		"切换显示模式：emotion(默认表情模式)、clock(时钟模式)、dialog(对话模式)",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"mode": map[string]interface{}{
 					"type":        "string",
-					"description": "显示模式：emotion(表情模式)、clock(时钟模式)、text(文字模式)",
-					"enum":        []string{"emotion", "clock", "text"},
+					"description": "显示模式：emotion(表情模式)、clock(时钟模式)、dialog(对话模式)、music(音乐模式)",
+					"enum":        []string{"emotion", "clock", "dialog", "music"},
 				},
 			},
 			"required": []string{"mode"},
@@ -1334,6 +1406,103 @@ func init() {
 			return map[string]interface{}{
 				"mode": "emotion",
 			}, nil
+		},
+	)
+
+	// 注册音乐播放工具
+	RegisterMCPTool(
+		"self.music.play",
+		"播放本地音乐",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册音乐暂停工具
+	RegisterMCPTool(
+		"self.music.pause",
+		"暂停当前播放的音乐",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册音乐停止工具
+	RegisterMCPTool(
+		"self.music.stop",
+		"停止播放音乐",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册下一首工具
+	RegisterMCPTool(
+		"self.music.next",
+		"播放下一首音乐",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册上一首工具
+	RegisterMCPTool(
+		"self.music.previous",
+		"播放上一首音乐",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册获取音乐列表工具
+	RegisterMCPTool(
+		"self.music.list",
+		"获取本地音乐列表",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return []interface{}{}, nil
+		},
+	)
+
+	// 注册播放指定歌曲工具
+	RegisterMCPTool(
+		"self.music.play_song",
+		"播放指定索引的歌曲",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"index": map[string]interface{}{
+					"type":        "integer",
+					"description": "歌曲索引（从0开始）",
+				},
+			},
+			"required": []string{"index"},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
 		},
 	)
 }
@@ -1474,6 +1643,21 @@ func (c *Client) handleMCPToolsCall(req MCPRequest) error {
 		result, err = c.setDisplayModeTool(params.Arguments)
 	case "self.display.get_status":
 		result = c.getDisplayStatus()
+	// 音乐相关工具
+	case "self.music.play":
+		result, err = c.musicPlayTool(params.Arguments)
+	case "self.music.pause":
+		result, err = c.musicPauseTool(params.Arguments)
+	case "self.music.stop":
+		result, err = c.musicStopTool(params.Arguments)
+	case "self.music.next":
+		result, err = c.musicNextTool(params.Arguments)
+	case "self.music.previous":
+		result, err = c.musicPreviousTool(params.Arguments)
+	case "self.music.list":
+		result = c.musicListTool()
+	case "self.music.play_song":
+		result, err = c.musicPlaySongTool(params.Arguments)
 	default:
 		// 尝试从注册表调用
 		result, err = CallMCPTool(params.Name, params.Arguments)
@@ -1602,10 +1786,12 @@ func (c *Client) setDisplayModeTool(args map[string]interface{}) (interface{}, e
 		displayMode = DisplayModeEmotion
 	case "clock":
 		displayMode = DisplayModeClock
-	case "text":
-		displayMode = DisplayModeText
+	case "dialog":
+		displayMode = DisplayModeDialog
+	case "music":
+		displayMode = DisplayModeMusic
 	default:
-		return nil, fmt.Errorf("invalid display mode: %s, valid modes are: emotion, clock, text", mode)
+		return nil, fmt.Errorf("invalid display mode: %s, valid modes are: emotion, clock, dialog, music", mode)
 	}
 
 	c.SetDisplayMode(displayMode)
@@ -1615,6 +1801,19 @@ func (c *Client) setDisplayModeTool(args map[string]interface{}) (interface{}, e
 	case DisplayModeClock:
 		if err := c.ShowDateTime(); err != nil {
 			return nil, err
+		}
+	case DisplayModeDialog:
+		// 显示对话模式提示
+		c.clearDialog()
+		if err := c.ShowText("对话模式已开启", c.config.Display.FontSize,
+			c.config.Display.TextAlign.Horizontal, c.config.Display.TextAlign.Vertical); err != nil {
+			c.logger.Warn("Failed to show dialog mode hint", "error", err)
+		}
+	case DisplayModeMusic:
+		// 显示音乐模式提示
+		if err := c.ShowText("音乐模式", c.config.Display.FontSize,
+			c.config.Display.TextAlign.Horizontal, c.config.Display.TextAlign.Vertical); err != nil {
+			c.logger.Warn("Failed to show music mode hint", "error", err)
 		}
 	case DisplayModeEmotion:
 		// 显示默认表情
@@ -1635,6 +1834,170 @@ func (c *Client) getDisplayStatus() map[string]interface{} {
 		"mode":         string(c.GetDisplayMode()),
 		"device_state": string(c.GetState()),
 	}
+}
+
+// ============================================================================
+// 音乐相关工具
+// ============================================================================
+
+// ShowMusicAnimation 显示音乐可视化效果
+func (c *Client) ShowMusicAnimation(songName string) error {
+	if c.config.Display.SkipExecution {
+		return nil
+	}
+
+	// 使用程序生成的可视化效果
+	if c.musicPlayer != nil {
+		levelChan := c.musicPlayer.GetVisualizeChannel()
+		color := struct{ R, G, B uint8 }{R: 0, G: 180, B: 255} // 青色
+		return c.displayCtrl.ShowMusicVisualizer(levelChan, songName, color)
+	}
+
+	return nil
+}
+
+// musicPlayTool 播放音乐
+func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	// 切换到音乐模式
+	c.SetDisplayMode(DisplayModeMusic)
+
+	if err := c.musicPlayer.Play(); err != nil {
+		return nil, err
+	}
+
+	// 显示音乐动画
+	if song := c.musicPlayer.GetCurrentSong(); song != nil {
+		go c.ShowMusicAnimation(song.Name)
+	}
+
+	return map[string]interface{}{
+		"playing": true,
+		"success": true,
+	}, nil
+}
+
+// musicPauseTool 暂停音乐
+func (c *Client) musicPauseTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	c.musicPlayer.Pause()
+
+	return map[string]interface{}{
+		"paused":  true,
+		"success": true,
+	}, nil
+}
+
+// musicStopTool 停止音乐
+func (c *Client) musicStopTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	c.musicPlayer.Stop()
+
+	return map[string]interface{}{
+		"stopped": true,
+		"success": true,
+	}, nil
+}
+
+// musicNextTool 下一首
+func (c *Client) musicNextTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	if err := c.musicPlayer.Next(); err != nil {
+		return nil, err
+	}
+
+	// 显示音乐动画
+	if song := c.musicPlayer.GetCurrentSong(); song != nil {
+		go c.ShowMusicAnimation(song.Name)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+	}, nil
+}
+
+// musicPreviousTool 上一首
+func (c *Client) musicPreviousTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	if err := c.musicPlayer.Previous(); err != nil {
+		return nil, err
+	}
+
+	// 显示音乐动画
+	if song := c.musicPlayer.GetCurrentSong(); song != nil {
+		go c.ShowMusicAnimation(song.Name)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+	}, nil
+}
+
+// musicListTool 获取音乐列表
+func (c *Client) musicListTool() interface{} {
+	if c.musicPlayer == nil {
+		return []interface{}{}
+	}
+
+	songs := c.musicPlayer.GetSongs()
+	result := make([]map[string]interface{}, len(songs))
+	for i, song := range songs {
+		result[i] = map[string]interface{}{
+			"index": i,
+			"name":  song.Name,
+			"path":  song.Path,
+		}
+	}
+
+	return map[string]interface{}{
+		"songs": result,
+		"count": len(result),
+	}
+}
+
+// musicPlaySongTool 播放指定歌曲
+func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, error) {
+	if c.musicPlayer == nil {
+		return nil, errors.New("music player is not initialized")
+	}
+
+	index, ok := args["index"].(float64)
+	if !ok {
+		return nil, errors.New("index must be a number")
+	}
+
+	indexInt := int(index)
+	if err := c.musicPlayer.PlaySong(indexInt); err != nil {
+		return nil, err
+	}
+
+	// 切换到音乐模式
+	c.SetDisplayMode(DisplayModeMusic)
+
+	// 显示音乐动画
+	if song := c.musicPlayer.GetCurrentSong(); song != nil {
+		go c.ShowMusicAnimation(song.Name)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"index":   indexInt,
+	}, nil
 }
 
 // sendMCPResponse 发送 MCP 响应
