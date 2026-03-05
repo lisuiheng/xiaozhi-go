@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"time"
 
 	"github.com/lisuiheng/xiaozhi-go/audio"
 	"github.com/lisuiheng/xiaozhi-go/display"
@@ -445,7 +446,7 @@ func (c *Client) sendJSON(data interface{}) error {
 
 	// 打印发送的 JSON（格式化输出）
 	formattedJSON, _ := json.MarshalIndent(data, "", "  ")
-	c.logger.Info("Sending JSON message", "json", string(formattedJSON))
+	fmt.Printf("%s Sending JSON message:\n%s\n", time.Now().Format("2006-01-02 15:04:05"), string(formattedJSON))
 
 	return c.transport.Send(msg, interfaces.MsgText)
 }
@@ -568,10 +569,7 @@ func (c *Client) handleMessage(msg []byte) error {
 	}
 
 	formattedJSON, _ := json.MarshalIndent(message, "", "  ")
-	c.logger.Info("Handling message",
-		"json",
-		formattedJSON,
-	)
+	fmt.Printf("%s Handling message:\n%s\n", time.Now().Format("2006-01-02 15:04:05"), string(formattedJSON))
 	switch msgType {
 	case "hello":
 		return c.handleHelloResponse(message)
