@@ -1922,6 +1922,9 @@ func (c *Client) disconnectForMusic() {
 	c.sessionID = ""
 	c.stateMutex.Unlock()
 
+	// 等待音频设备完全释放
+	time.Sleep(500 * time.Millisecond)
+
 	c.logger.Info("Disconnected for music playback, audio device released")
 }
 
