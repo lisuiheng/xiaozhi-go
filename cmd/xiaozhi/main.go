@@ -86,7 +86,7 @@ func main() {
 	var keyboardListener *input.KeyboardListener
 	keyboardDevice := "/dev/input/event0" // 默认键盘设备路径
 	if _, err := os.Stat(keyboardDevice); err == nil {
-		keyboardListener = input.NewKeyboardListener(keyboardDevice, client, client, handleKeyboardAction)
+		keyboardListener = input.NewKeyboardListener(keyboardDevice, client, handleKeyboardAction)
 		if err := keyboardListener.Start(); err != nil {
 			logger.Warn("Failed to start keyboard listener", "error", err)
 		} else {
