@@ -342,10 +342,8 @@ func (c *Client) SendAudio(data []byte) error {
 
 // Client 添加流控制方法
 func (c *Client) BeginAudioStream() error {
-	// 使用 audioManager 的录音状态来判断
-	if c.audioManager != nil && c.audioManager.IsRecording() {
-		return errors.New("cannot begin stream: already recording")
-	}
+	// 只作为标记检查，不实际管理录音状态
+	// 录音状态由 audioManager 统一管理
 	return nil
 }
 
@@ -707,8 +705,6 @@ func (c *Client) handleTTSMessage(msg map[string]interface{}) error {
 	switch state {
 	case "start":
 		c.EndAudioStream()
-		// TTS 开始时停止录音，避免资源冲突
-		c.StopAudioCapture()
 		if c.GetState() == DeviceStateListening {
 			c.logger.Debug("Forcing stop listening due to TTS start")
 			c.setState(DeviceStateSpeaking)
