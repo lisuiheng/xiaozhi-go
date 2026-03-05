@@ -1910,7 +1910,8 @@ func (c *Client) disconnectForMusic() {
 	c.stateMutex.Unlock()
 
 	// 等待音频设备完全释放（增加等待时间，确保设备释放）
-	time.Sleep(1 * time.Second)
+	// 音乐播放需要独占音频设备，所以需要等待足够的时间让前一个音频流完全关闭
+	time.Sleep(2 * time.Second)
 
 	c.logger.Info("Disconnected for music playback, audio device released")
 }
@@ -1966,21 +1967,36 @@ func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error)
 
 	c.logger.Info("musicPlayTool: preparing to play music")
 
-	// 断开 WebSocket 连接，释放音频设备
-	c.disconnectForMusic()
-
 	// 切换到音乐模式
 	c.SetDisplayMode(DisplayModeMusic)
 
+	// 先尝试播放音乐
 	if err := c.musicPlayer.Play(); err != nil {
 		c.logger.Error("Failed to start music playback", "error", err)
 		return nil, err
 	}
 
+	// 播放成功后，断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
+
 	// 显示音乐动画
 	if song := c.musicPlayer.GetCurrentSong(); song != nil {
 		go c.ShowMusicAnimation(song.Name)
 	}
+
+	// 注册一个回调，在音乐播放结束后自动重连
+	go func() {
+		// 等待音乐播放完成
+		for c.musicPlayer.IsPlaying() {
+			time.Sleep(500 * time.Millisecond)
+		}
+		// 音乐停止后重连
+		time.Sleep(1 * time.Second)
+		if !c.musicPlayer.IsPlaying() && !c.musicPlayer.IsPaused() {
+			c.logger.Info("Music playback completed, reconnecting")
+			c.reconnectAfterMusic()
+		}
+	}()
 
 	return map[string]interface{}{
 		"playing": true,
@@ -2034,6 +2050,9 @@ func (c *Client) musicNextTool(args map[string]interface{}) (interface{}, error)
 		go c.ShowMusicAnimation(song.Name)
 	}
 
+	// 如果当前没有连接（音乐播放中断开的），不需要重连
+	// 如果已经重连了，这里也不需要额外操作
+
 	return map[string]interface{}{
 		"success": true,
 	}, nil
@@ -2053,6 +2072,9 @@ func (c *Client) musicPreviousTool(args map[string]interface{}) (interface{}, er
 	if song := c.musicPlayer.GetCurrentSong(); song != nil {
 		go c.ShowMusicAnimation(song.Name)
 	}
+
+	// 如果当前没有连接（音乐播放中断开的），不需要重连
+	// 如果已经重连了，这里也不需要额外操作
 
 	return map[string]interface{}{
 		"success": true,
@@ -2089,19 +2111,22 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 
 	c.logger.Info("musicPlaySongTool: preparing to play music")
 
-	// 断开 WebSocket 连接，释放音频设备
-	c.disconnectForMusic()
-
 	index, ok := args["index"].(float64)
 	if !ok {
 		return nil, errors.New("index must be a number")
 	}
 
 	indexInt := int(index)
+
+	// 先尝试播放音乐，如果成功再断开连接
+	// 这样可以避免在播放失败时无法发送响应的问题
 	if err := c.musicPlayer.PlaySong(indexInt); err != nil {
 		c.logger.Error("Failed to start music playback", "error", err)
 		return nil, err
 	}
+
+	// 播放成功后，断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
 
 	// 切换到音乐模式
 	c.SetDisplayMode(DisplayModeMusic)
@@ -2110,6 +2135,20 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 	if song := c.musicPlayer.GetCurrentSong(); song != nil {
 		go c.ShowMusicAnimation(song.Name)
 	}
+
+	// 注册一个回调，在音乐播放结束后自动重连
+	go func() {
+		// 等待音乐播放完成
+		for c.musicPlayer.IsPlaying() {
+			time.Sleep(500 * time.Millisecond)
+		}
+		// 音乐停止后重连
+		time.Sleep(1 * time.Second)
+		if !c.musicPlayer.IsPlaying() && !c.musicPlayer.IsPaused() {
+			c.logger.Info("Music playback completed, reconnecting")
+			c.reconnectAfterMusic()
+		}
+	}()
 
 	return map[string]interface{}{
 		"success": true,

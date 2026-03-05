@@ -455,9 +455,9 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 
 	p.logger.Info("playWithExternalPlayer called", "filePath", filePath, "ext", ext)
 
-	// 最多重试 3 次，每次等待 500ms
-	maxRetries := 3
-	retryDelay := 500 * time.Millisecond
+	// 最多重试 5 次，每次等待 1 秒，给音频设备更多释放时间
+	maxRetries := 5
+	retryDelay := 1 * time.Second
 
 	for retry := 0; retry < maxRetries; retry++ {
 		if retry > 0 {
@@ -508,21 +508,15 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 		}
 		if err != nil {
 			p.logger.Error("Player command failed", "error", err, "output", string(output))
+			// 检查输出中是否有设备忙碌错误，如果是则重试
+			outputStr := string(output)
+			if strings.Contains(outputStr, "Device or resource busy") ||
+				strings.Contains(outputStr, "Couldn't open audio device") ||
+				strings.Contains(outputStr, "audio open failed") {
+				p.logger.Warn("Audio device busy, will retry", "attempt", retry+1)
+				continue
+			}
 			return fmt.Errorf("player failed: %w, output: %s", err, string(output))
-		}
-
-		// 检查输出中是否有设备忙碌错误，如果是则重试
-		outputStr := string(output)
-		if strings.Contains(outputStr, "Device or resource busy") ||
-			strings.Contains(outputStr, "Couldn't open audio device") {
-			p.logger.Warn("Audio device busy, will retry", "attempt", retry+1)
-			continue
-		}
-
-		// 检查其他错误信息
-		if strings.Contains(outputStr, "audio open failed") {
-			p.logger.Error("Player reported audio device error", "output", outputStr)
-			return fmt.Errorf("audio device error: %s", outputStr)
 		}
 
 		p.logger.Info("Player command completed successfully")
