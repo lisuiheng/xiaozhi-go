@@ -410,6 +410,18 @@ func (c *Client) GetCurrentState() string {
 	return string(c.GetState())
 }
 
+// IsConnected 检查是否已连接到服务器
+func (c *Client) IsConnected() bool {
+	c.stateMutex.RLock()
+	defer c.stateMutex.RUnlock()
+	return c.transport != nil && (c.state == DeviceStateIdle || c.state == DeviceStateListening || c.state == DeviceStateSpeaking)
+}
+
+// SetState 设置设备状态（公开方法）
+func (c *Client) SetState(state DeviceState) {
+	c.setState(state)
+}
+
 // 设置设备状态
 func (c *Client) setState(newState DeviceState) {
 	c.stateMutex.Lock()
@@ -912,8 +924,18 @@ func (c *Client) StopAudioCapture() {
 // SendStartListening 发送开始监听指令
 func (c *Client) SendStartListening(mode ListenMode) error {
 	// 检查当前状态
-	if c.GetState() != DeviceStateIdle && c.GetState() != DeviceStateConnecting {
-		return fmt.Errorf("cannot start listening from state: %s", c.GetState())
+	currentState := c.GetState()
+	if currentState != DeviceStateIdle && currentState != DeviceStateConnecting {
+		// 如果处于 disconnected 状态，提示用户等待重连
+		if currentState == DeviceStateDisconnected {
+			return fmt.Errorf("device is disconnected, waiting for reconnection")
+		}
+		return fmt.Errorf("cannot start listening from state: %s", currentState)
+	}
+
+	// 检查连接是否存在
+	if !c.IsConnected() {
+		return fmt.Errorf("not connected to server")
 	}
 
 	// 构造监听消息
@@ -1885,6 +1907,8 @@ func (c *Client) reconnectAfterMusic() {
 		return
 	}
 
+	// 重连成功后设置为空闲状态
+	c.setState(DeviceStateIdle)
 	c.logger.Info("Reconnected after music playback")
 }
 

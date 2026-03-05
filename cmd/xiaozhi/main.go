@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/lisuiheng/xiaozhi-go/core"
 	"github.com/lisuiheng/xiaozhi-go/input"
@@ -61,6 +62,21 @@ func main() {
 		switch action {
 		case "wakeup":
 			// 从 idle 状态唤醒，开始监听
+			if !client.IsConnected() {
+				logger.Warn("Not connected, attempting to reconnect...")
+				// 异步尝试重连
+				go func() {
+					ctx := context.Background()
+					if err := client.Connect(ctx); err != nil {
+						logger.Error("Reconnect failed", "error", err)
+						return
+					}
+					client.SetState(core.DeviceStateIdle)
+					logger.Info("Reconnect successful, ready to listen")
+				}()
+				// 等待一下确保连接建立
+				time.Sleep(500 * time.Millisecond)
+			}
 			if err := client.SendStartListening(core.ListenModeAuto); err != nil {
 				logger.Warn("Failed to start listening", "error", err)
 			} else {
