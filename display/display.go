@@ -189,21 +189,12 @@ func (dc *DisplayController) StartAnimation(folderPath string, rotation Rotation
 	return nil
 }
 
-// ShowDateTime 显示时间日期（增强版）
-// fontSize: 主字体大小（时间使用的大小）
-// color: 主颜色
-// hAlign, vAlign: 对齐方式
-// timeFormat: 时间格式
-// dateFormat: 日期格式
-// showSeconds: 是否显示秒数
-// separateLines: 是否分行显示（true=日期和时间分开，false=同一行）
+// ShowDateTime 显示时间日期
 func (dc *DisplayController) ShowDateTime(
 	fontSize float64,
 	color interface{},
 	hAlign, vAlign int,
 	timeFormat, dateFormat string,
-	showSeconds bool,
-	separateLines bool,
 ) error {
 	dc.taskMutex.Lock()
 	defer dc.taskMutex.Unlock()
@@ -233,7 +224,7 @@ func (dc *DisplayController) ShowDateTime(
 
 	go func() {
 		defer close(dc.currentTask.done)
-		dc.runDateTimeEnhanced(ctx, fontSize, color, hAlign, vAlign, timeFormat, dateFormat, showSeconds, separateLines)
+		dc.runDateTime(ctx, fontSize, color, hAlign, vAlign, timeFormat, dateFormat)
 	}()
 
 	return nil
@@ -476,26 +467,13 @@ func (dc *DisplayController) runAnimation(ctx context.Context, folderPath string
 	slog.Info("动画停止")
 }
 
-// runDateTime 时间日期显示实现（增强版）
+// runDateTime 时间日期显示实现
 func (dc *DisplayController) runDateTime(
 	ctx context.Context,
 	fontSize float64,
 	color interface{},
 	hAlign, vAlign int,
 	timeFormat, dateFormat string,
-) {
-	dc.runDateTimeEnhanced(ctx, fontSize, color, hAlign, vAlign, timeFormat, dateFormat, true, true)
-}
-
-// runDateTimeEnhanced 增强版时间日期显示实现
-func (dc *DisplayController) runDateTimeEnhanced(
-	ctx context.Context,
-	fontSize float64,
-	color interface{},
-	hAlign, vAlign int,
-	timeFormat, dateFormat string,
-	showSeconds bool,
-	separateLines bool,
 ) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -508,7 +486,7 @@ func (dc *DisplayController) runDateTimeEnhanced(
 		return
 	}
 
-	slog.Info("显示时间日期（增强版）", "大小", fontSize, "时间格式", timeFormat, "日期格式", dateFormat, "显示秒数", showSeconds, "分行显示", separateLines)
+	slog.Info("显示时间日期", "大小", fontSize, "时间格式", timeFormat, "日期格式", dateFormat)
 
 	if err := dc.initFramebuffer(); err != nil {
 		slog.Error("初始化帧缓冲失败", "错误", err)
@@ -516,7 +494,6 @@ func (dc *DisplayController) runDateTimeEnhanced(
 	}
 	defer dc.closeFramebuffer()
 
-	// 加载主字体（时间使用）
 	if err := dc.loadFont(dc.fontPath, fontSize); err != nil {
 		slog.Error("加载字体错误", "路径", dc.fontPath, "错误", err)
 		return
@@ -524,8 +501,6 @@ func (dc *DisplayController) runDateTimeEnhanced(
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-
-	var lastSecond int = -1 // 用于检测秒数变化
 
 datetimeLoop:
 	for {
@@ -539,108 +514,17 @@ datetimeLoop:
 				dbuffer.backBuffer[i] = 0
 			}
 
-			currentSecond := now.Second()
 			timeStr := now.Format(timeFormat)
 			dateStr := now.Format(dateFormat)
+			text := dateStr + "\n" + timeStr
 
-			// 如果不显示秒数，且当前秒数与上次相同，则跳过绘制（减少闪烁）
-			if !showSeconds && currentSecond == lastSecond {
-				continue
-			}
-			lastSecond = currentSecond
-
-			// 分层绘制：日期和时间使用不同大小
-			if separateLines {
-				// 分行显示模式：日期在上，时间在下，时间使用更大字体
-				dc.drawDateTimeSeparate(dateStr, timeStr, fontSize, color, hAlign, vAlign)
-			} else {
-				// 单行显示模式
-				text := dateStr + " " + timeStr
-				dc.drawTextToBuffer(text, color, hAlign, vAlign)
-			}
+			dc.drawTextToBuffer(text, color, hAlign, vAlign)
 
 			dc.waitForVSync()
 			copy(dbuffer.frontBuffer, dbuffer.backBuffer)
 			copy(fbData, dbuffer.frontBuffer)
 		}
 	}
-}
-
-// drawDateTimeSeparate 分层绘制日期和时间（时间用大字体，日期用小字体）
-func (dc *DisplayController) drawDateTimeSeparate(dateStr, timeStr string, timeFontSize float64, color interface{}, hAlign, vAlign int) {
-	// 计算日期字体大小（约为时间的 60%）
-	dateFontSize := timeFontSize * 0.6
-
-	// 重新加载日期字体（较小）
-	if err := dc.loadFont(dc.fontPath, dateFontSize); err != nil {
-		slog.Warn("加载日期字体失败", "错误", err)
-		// 如果失败，使用相同字体大小
-		dateFontSize = timeFontSize
-	}
-
-	// 测量日期文本宽度
-	dateMetrics := dc.fontFace.Metrics()
-	dateAscent := dateMetrics.Ascent.Ceil()
-	dateDescent := dateMetrics.Descent.Ceil()
-	dateLineHeight := dateAscent + dateDescent + 2
-
-	dateWidth := font.MeasureString(dc.fontFace, dateStr).Ceil()
-	dateHeight := dateLineHeight
-
-	// 重新加载时间字体（较大）
-	if err := dc.loadFont(dc.fontPath, timeFontSize); err != nil {
-		slog.Error("加载时间字体失败", "错误", err)
-		return
-	}
-
-	timeMetrics := dc.fontFace.Metrics()
-	timeAscent := timeMetrics.Ascent.Ceil()
-	timeDescent := timeMetrics.Descent.Ceil()
-	timeLineHeight := timeAscent + timeDescent + 2
-
-	timeWidth := font.MeasureString(dc.fontFace, timeStr).Ceil()
-	timeHeight := timeLineHeight
-
-	// 计算总高度
-	totalHeight := dateHeight + timeHeight + 5 // 5px 间距
-
-	// 计算起始 Y 坐标（基于垂直对齐方式）
-	var startY int
-	switch vAlign {
-	case ALIGN_MIDDLE:
-		startY = (fbHeight - totalHeight) / 2
-	case ALIGN_BOTTOM:
-		startY = fbHeight - totalHeight
-	default: // ALIGN_TOP
-		startY = 0
-	}
-
-	// 绘制日期（上方，小字体）
-	var dateX int
-	switch hAlign {
-	case ALIGN_CENTER:
-		dateX = (fbWidth - dateWidth) / 2
-	case ALIGN_RIGHT:
-		dateX = fbWidth - dateWidth
-	default: // ALIGN_LEFT
-		dateX = 0
-	}
-
-	dc.drawString(dateStr, dateX, startY+dateAscent, color)
-
-	// 绘制时间（下方，大字体）
-	var timeX int
-	switch hAlign {
-	case ALIGN_CENTER:
-		timeX = (fbWidth - timeWidth) / 2
-	case ALIGN_RIGHT:
-		timeX = fbWidth - timeWidth
-	default: // ALIGN_LEFT
-		timeX = 0
-	}
-
-	timeY := startY + dateHeight + 5 + timeAscent // 5px 间距
-	dc.drawString(timeStr, timeX, timeY, color)
 }
 
 // runText 文本显示实现
