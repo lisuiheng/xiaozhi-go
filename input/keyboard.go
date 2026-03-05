@@ -87,7 +87,7 @@ func (k *KeyboardListener) Start() error {
 					now := time.Now()
 					// 检查是否是双击
 					if event.Code == k.lastKeyCode && now.Sub(k.lastKeyTime) < k.doubleTapTime {
-						k.actionFunc("idle")        // 双击进入空闲状态
+						k.actionFunc("reset")       // 双击重置为初始状态
 						k.lastKeyTime = time.Time{} // 重置时间，避免连续触发
 						continue
 					}

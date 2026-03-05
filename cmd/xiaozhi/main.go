@@ -94,12 +94,36 @@ func main() {
 			} else {
 				logger.Info("Operation interrupted")
 			}
+		case "reset":
+			// 双击按键：重置为初始状态
+			logger.Info("Resetting to initial state...")
+			// 停止音乐播放
+			if client.IsPlayingMusic() {
+				client.StopMusic()
+			}
+			// 停止监听
+			if err := client.StopListening(); err != nil {
+				logger.Debug("Stop listening for reset", "error", err)
+			}
+			// 关闭并重新创建音频管理器
+			if err := client.ResetAudioManager(); err != nil {
+				logger.Error("Failed to reset audio manager", "error", err)
+			}
+			// 恢复显示模式
+			client.SetDisplayMode(core.DisplayModeEmotion)
+			// 显示中性表情
+			if err := client.ShowEmotion("neutral"); err != nil {
+				logger.Debug("Failed to show neutral emotion", "error", err)
+			}
+			// 设置为空闲状态
+			client.SetState(core.DeviceStateIdle)
+			logger.Info("System has been reset to initial state")
 		case "idle":
-			// 双击按键：强制回到空闲状态
+			// 兼容旧的 idle 动作（如果有的话）
 			if err := client.StopListening(); err != nil {
 				logger.Debug("Stop listening for idle", "error", err)
 			}
-			logger.Info("Forced to idle state by double tap")
+			logger.Info("Forced to idle state")
 		}
 	}
 

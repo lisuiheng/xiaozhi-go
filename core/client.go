@@ -433,6 +433,38 @@ func (c *Client) StopMusic() {
 	}
 }
 
+// ResetAudioManager 重置音频管理器（关闭并重新创建）
+func (c *Client) ResetAudioManager() error {
+	c.logger.Info("Resetting audio manager...")
+
+	// 停止录音
+	if c.audioManager != nil {
+		c.audioManager.StopRecording()
+
+		// 关闭旧的音频管理器
+		if err := c.audioManager.Close(); err != nil {
+			c.logger.Warn("Failed to close old audio manager", "error", err)
+		}
+	}
+
+	// 重新创建音频管理器
+	var err error
+	c.audioManager, err = audio.NewManager(
+		audio.Config{
+			SampleRate:    c.config.Audio.SampleRate,
+			Channels:      c.config.Audio.Channels,
+			FrameDuration: c.config.Audio.FrameDuration,
+		},
+		c.logger,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to recreate audio manager: %w", err)
+	}
+
+	c.logger.Info("Audio manager has been reset successfully")
+	return nil
+}
+
 // SetState 设置设备状态（公开方法）
 func (c *Client) SetState(state DeviceState) {
 	c.setState(state)
