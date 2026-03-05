@@ -16,6 +16,15 @@ import (
 	"sync"
 )
 
+// DisplayMode 显示模式
+type DisplayMode string
+
+const (
+	DisplayModeEmotion DisplayMode = "emotion" // 默认模式，显示表情
+	DisplayModeClock   DisplayMode = "clock"   // 时钟模式，显示时间
+	DisplayModeText    DisplayMode = "text"    // 对话模式，显示文字
+)
+
 type Client struct {
 	config        Config
 	transport     interfaces.TransportProtocol
@@ -33,6 +42,10 @@ type Client struct {
 	audioDecoder  *audio.OpusDecoder
 	audioPlayer   audio.AudioPlayer
 	displayCtrl   *display.DisplayController
+
+	// 显示模式管理
+	displayMode   DisplayMode
+	displayModeMu sync.RWMutex
 }
 
 // Config 是客户端配置结构（已调整为匹配YAML文件的结构）
@@ -178,6 +191,7 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		audioDecoder:  decoder,
 		audioPlayer:   player,
 		displayCtrl:   displayCtrl,
+		displayMode:   DisplayModeEmotion, // 默认为表情模式
 	}, nil
 }
 
@@ -742,21 +756,13 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 		"emotion", emotion,
 		"session", sessionID)
 
-	// 根据 LLM 返回的表情显示对应的动画
-	if err := c.ShowEmotion(emotion); err != nil {
-		c.logger.Debug("Failed to show emotion", "emotion", emotion, "error", err)
-	}
-
-	// 这里可以添加对LLM响应的进一步处理逻辑
-	// 例如：
-	// - 显示在UI上
-	// - 触发特定动作
-	// - 转换为语音（TTS）
-
-	// 示例：如果消息包含emoji或特定内容，可以触发特定处理
-	if text == "😎" {
-		c.logger.Debug("Received cool emoji response")
-		// 可以在这里添加特殊处理逻辑
+	// 只在表情模式下才更新表情
+	if c.GetDisplayMode() == DisplayModeEmotion {
+		if err := c.ShowEmotion(emotion); err != nil {
+			c.logger.Debug("Failed to show emotion", "emotion", emotion, "error", err)
+		}
+	} else {
+		c.logger.Debug("Not in emotion mode, skipping emotion update", "currentMode", c.GetDisplayMode())
 	}
 
 	return nil
@@ -969,21 +975,42 @@ func (c *Client) ShowImage(imagePath string) error {
 	return c.displayCtrl.ShowImage(imagePath, rotation)
 }
 
-// ShowText 显示文本
+// GetDisplayMode 获取当前显示模式
+func (c *Client) GetDisplayMode() DisplayMode {
+	c.displayModeMu.RLock()
+	defer c.displayModeMu.RUnlock()
+	return c.displayMode
+}
+
+// SetDisplayMode 设置显示模式
+func (c *Client) SetDisplayMode(mode DisplayMode) {
+	c.displayModeMu.Lock()
+	c.displayMode = mode
+	c.displayModeMu.Unlock()
+	c.logger.Info("Display mode changed", "mode", mode)
+}
+
+// ShowText 显示文本（切换到文字模式）
 func (c *Client) ShowText(text string, fontSize float64, hAlign, vAlign int) error {
 	if c.config.Display.SkipExecution {
 		return nil
 	}
 
-	color := ColorRGB(255, 255, 255) // 默认白色
+	// 切换到文字模式
+	c.SetDisplayMode(DisplayModeText)
+
+	color := ColorRGB(255, 255, 255)
 	return c.displayCtrl.ShowText(text, fontSize, color, hAlign, vAlign)
 }
 
-// ShowDateTime 显示日期时间
+// ShowDateTime 显示日期时间（切换到时钟模式）
 func (c *Client) ShowDateTime() error {
 	if c.config.Display.SkipExecution {
 		return nil
 	}
+
+	// 切换到时钟模式
+	c.SetDisplayMode(DisplayModeClock)
 
 	color := ColorRGB(255, 255, 255)
 	return c.displayCtrl.ShowDateTime(
@@ -994,6 +1021,11 @@ func (c *Client) ShowDateTime() error {
 		c.config.Display.TimeFormat,
 		c.config.Display.DateFormat,
 	)
+}
+
+// SwitchToEmotionMode 切换到表情模式
+func (c *Client) SwitchToEmotionMode() {
+	c.SetDisplayMode(DisplayModeEmotion)
 }
 
 // StopDisplay 停止显示
@@ -1253,13 +1285,48 @@ func init() {
 	// 注册显示时间工具
 	RegisterMCPTool(
 		"self.display.show_time",
-		"在显示屏上显示当前时间",
+		"在显示屏上显示当前时间（切换到时钟模式）",
 		map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 		func(args map[string]interface{}) (interface{}, error) {
 			return true, nil
+		},
+	)
+
+	// 注册切换显示模式工具
+	RegisterMCPTool(
+		"self.display.set_mode",
+		"切换显示模式：emotion(默认表情模式)、clock(时钟模式)、text(文字模式)",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"mode": map[string]interface{}{
+					"type":        "string",
+					"description": "显示模式：emotion(表情模式)、clock(时钟模式)、text(文字模式)",
+					"enum":        []string{"emotion", "clock", "text"},
+				},
+			},
+			"required": []string{"mode"},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return true, nil
+		},
+	)
+
+	// 注册获取显示状态工具
+	RegisterMCPTool(
+		"self.display.get_status",
+		"获取当前显示状态，包括显示模式和当前显示内容",
+		map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+		func(args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{
+				"mode": "emotion",
+			}, nil
 		},
 	)
 }
@@ -1396,6 +1463,10 @@ func (c *Client) handleMCPToolsCall(req MCPRequest) error {
 		result, err = c.showTextTool(params.Arguments)
 	case "self.display.show_time":
 		result, err = c.showTimeTool(params.Arguments)
+	case "self.display.set_mode":
+		result, err = c.setDisplayModeTool(params.Arguments)
+	case "self.display.get_status":
+		result = c.getDisplayStatus()
 	default:
 		// 尝试从注册表调用
 		result, err = CallMCPTool(params.Name, params.Arguments)
@@ -1474,6 +1545,9 @@ func (c *Client) showEmotionTool(args map[string]interface{}) (interface{}, erro
 		return nil, errors.New("emotion must be a string")
 	}
 
+	// 切换到表情模式
+	c.SetDisplayMode(DisplayModeEmotion)
+
 	if err := c.ShowEmotion(emotion); err != nil {
 		return nil, err
 	}
@@ -1506,6 +1580,54 @@ func (c *Client) showTimeTool(args map[string]interface{}) (interface{}, error) 
 		return nil, err
 	}
 	return true, nil
+}
+
+// setDisplayModeTool 设置显示模式工具
+func (c *Client) setDisplayModeTool(args map[string]interface{}) (interface{}, error) {
+	mode, ok := args["mode"].(string)
+	if !ok {
+		return nil, errors.New("mode must be a string")
+	}
+
+	var displayMode DisplayMode
+	switch mode {
+	case "emotion":
+		displayMode = DisplayModeEmotion
+	case "clock":
+		displayMode = DisplayModeClock
+	case "text":
+		displayMode = DisplayModeText
+	default:
+		return nil, fmt.Errorf("invalid display mode: %s, valid modes are: emotion, clock, text", mode)
+	}
+
+	c.SetDisplayMode(displayMode)
+
+	// 根据模式执行相应操作
+	switch displayMode {
+	case DisplayModeClock:
+		if err := c.ShowDateTime(); err != nil {
+			return nil, err
+		}
+	case DisplayModeEmotion:
+		// 显示默认表情
+		if err := c.ShowEmotion("neutral"); err != nil {
+			c.logger.Warn("Failed to show neutral emotion", "error", err)
+		}
+	}
+
+	return map[string]interface{}{
+		"mode":    string(displayMode),
+		"success": true,
+	}, nil
+}
+
+// getDisplayStatus 获取显示状态
+func (c *Client) getDisplayStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"mode":         string(c.GetDisplayMode()),
+		"device_state": string(c.GetState()),
+	}
 }
 
 // sendMCPResponse 发送 MCP 响应
