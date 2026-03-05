@@ -508,9 +508,29 @@ func (c *Client) messageHandler() {
 		case <-c.closeChan:
 			return
 		default:
-			msgChan := c.transport.Receive()
+			// 检查 transport 是否存在
+			c.stateMutex.RLock()
+			transport := c.transport
+			c.stateMutex.RUnlock()
+
+			if transport == nil {
+				// transport 已关闭，等待重新连接或退出
+				select {
+				case <-c.closeChan:
+					return
+				case <-time.After(100 * time.Millisecond):
+					continue
+				}
+			}
+
+			msgChan := transport.Receive()
 			select {
-			case msg := <-msgChan:
+			case msg, ok := <-msgChan:
+				if !ok {
+					// channel 已关闭
+					c.logger.Info("Message channel closed")
+					continue
+				}
 				switch msg.Type {
 				case interfaces.MsgText: // 文本消息（JSON）
 					if err := c.handleTextMessage(msg.Payload); err != nil {
