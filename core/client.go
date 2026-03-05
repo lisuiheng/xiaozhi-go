@@ -39,11 +39,7 @@ type Client struct {
 	audioSendChan chan []byte
 	wg            sync.WaitGroup
 	logger        *slog.Logger
-	audioCtrl     audio.Controller
-	audioRecorder audio.Recorder
-	audioStopChan chan struct{}
-	audioDecoder  *audio.OpusDecoder
-	audioPlayer   audio.AudioPlayer
+	audioManager  audio.Manager // 统一的音频管理器
 	displayCtrl   *display.DisplayController
 
 	// 显示模式管理
@@ -160,7 +156,8 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		return nil, errors.New("logger cannot be nil")
 	}
 
-	recorder, err := audio.NewRecorder(
+	// 创建统一的音频管理器
+	audioManager, err := audio.NewManager(
 		audio.Config{
 			SampleRate:    cfg.Audio.SampleRate,
 			Channels:      cfg.Audio.Channels,
@@ -169,28 +166,7 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		log,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create audio recorder: %w", err)
-	}
-
-	// 初始化OPUS解码器
-	decoder, err := audio.NewOpusDecoder(
-		cfg.Audio.SampleRate,
-		cfg.Audio.Channels,
-		log,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create opus decoder: %w", err)
-	}
-
-	// 初始化音频播放器
-	player, err := audio.NewPCMPlayer(
-		cfg.Audio.SampleRate,
-		cfg.Audio.FrameDuration,
-		cfg.Audio.Channels,
-		log,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create audio player: %w", err)
+		return nil, fmt.Errorf("failed to create audio manager: %w", err)
 	}
 
 	// 初始化显示控制器
@@ -212,11 +188,7 @@ func NewClient(cfg Config, log *slog.Logger) (*Client, error) {
 		messageChan:   make(chan []byte, 100),
 		audioSendChan: make(chan []byte, 100),
 		logger:        log,
-		audioCtrl:     audio.NewController(),
-		audioRecorder: recorder,
-		audioStopChan: make(chan struct{}),
-		audioDecoder:  decoder,
-		audioPlayer:   player,
+		audioManager:  audioManager,
 		displayCtrl:   displayCtrl,
 		displayMode:   DisplayModeEmotion,
 		musicPlayer:   musicPlayer,
@@ -355,7 +327,7 @@ func (c *Client) StopListening() error {
 
 // 修改后的 SendAudio（不再管理状态）
 func (c *Client) SendAudio(data []byte) error {
-	if !c.audioCtrl.IsSending() {
+	if c.audioManager == nil || !c.audioManager.IsRecording() {
 		return errors.New("audio stream not started")
 	}
 
@@ -370,14 +342,15 @@ func (c *Client) SendAudio(data []byte) error {
 
 // Client 添加流控制方法
 func (c *Client) BeginAudioStream() error {
-	if !c.audioCtrl.StartSending() {
-		return errors.New("cannot begin stream: currently receiving")
+	// 使用 audioManager 的录音状态来判断
+	if c.audioManager != nil && c.audioManager.IsRecording() {
+		return errors.New("cannot begin stream: already recording")
 	}
 	return nil
 }
 
 func (c *Client) EndAudioStream() {
-	c.audioCtrl.StopSending()
+	// 不需要额外操作，由状态管理控制
 }
 
 // GetStatus 获取当前状态
@@ -404,6 +377,13 @@ func (c *Client) Close() error {
 
 	// 停止音频采集
 	c.StopAudioCapture()
+
+	// 关闭音频管理器，释放所有音频资源
+	if c.audioManager != nil {
+		if err := c.audioManager.Close(); err != nil {
+			c.logger.Warn("Failed to close audio manager", "error", err)
+		}
+	}
 
 	if c.transport != nil {
 		if err := c.transport.Close(); err != nil {
@@ -440,14 +420,11 @@ func (c *Client) setState(newState DeviceState) {
 		// 状态转换时的特殊处理
 		switch newState {
 		case DeviceStateSpeaking:
-			// 进入 Speaking 状态时停止音频发送
-			c.audioCtrl.StopSending()
+			// 进入 Speaking 状态时停止音频发送（由 audioManager 管理）
 			c.logger.Debug("Auto-stopped audio sending for speaking state")
 		case DeviceStateListening:
 			// 进入 Listening 状态时确保可以发送
-			if !c.audioCtrl.StartSending() {
-				c.logger.Warn("Failed to start audio sending when entering listening state")
-			}
+			c.logger.Debug("Entering listening state")
 		}
 
 		c.state = newState
@@ -550,20 +527,20 @@ func (c *Client) messageHandler() {
 	}
 }
 
-// 示例：处理接收到的OPUS音频流
+// 示例：处理接收到的 OPUS音频流
 func (c *Client) handleReceivedAudio(data []byte) error {
-	if !c.audioCtrl.IsReceiving() {
-		return errors.New("not in audio receiving state")
+	if c.audioManager == nil {
+		return errors.New("audio manager not initialized")
 	}
 
-	// 1. 解码音频（假设使用OPUS解码器）
-	pcmData, err := c.audioDecoder.Decode(data)
+	// 1. 解码音频
+	pcmData, err := c.audioManager.Decode(data)
 	if err != nil {
 		return fmt.Errorf("audio decode failed: %w", err)
 	}
 
 	// 2. 播放音频
-	if err := c.audioPlayer.Play(pcmData); err != nil {
+	if err := c.audioManager.Play(pcmData); err != nil {
 		return fmt.Errorf("audio play failed: %w", err)
 	}
 
@@ -574,13 +551,8 @@ func (c *Client) handleReceivedAudio(data []byte) error {
 // 新增二进制消息处理方法
 func (c *Client) handleBinaryMessage(data []byte) error {
 	// 根据业务逻辑处理二进制数据（如音频、文件等）
-	// 示例：如果是TTS音频数据，传递给播放器
-	if c.audioCtrl.IsReceiving() {
-		return c.handleReceivedAudio(data)
-	}
-
-	c.logger.Debug("Received unexpected binary message", "size", len(data))
-	return nil
+	// 示例：如果是 TTS 音频数据，传递给播放器
+	return c.handleReceivedAudio(data)
 }
 
 // 实现handleTextMessage
@@ -612,7 +584,7 @@ func (c *Client) audioSender() {
 		case <-c.closeChan:
 			return
 		case data := <-c.audioSendChan:
-			if c.audioCtrl.IsSending() {
+			if c.audioManager != nil && c.audioManager.IsRecording() {
 				if err := c.transport.Send(data, interfaces.MsgBinary); err != nil {
 					c.logger.Error("Failed to send audio", "error", err)
 					return
@@ -728,12 +700,9 @@ func (c *Client) handleTTSMessage(msg map[string]interface{}) error {
 			c.setState(DeviceStateSpeaking)
 		}
 
-		if !c.audioCtrl.StartReceiving() {
-			return errors.New("cannot receive while sending")
-		}
+		// 使用 audioManager 统一处理音频接收
 		c.setState(DeviceStateSpeaking)
 	case "stop":
-		c.audioCtrl.StopReceiving()
 		c.logger.Info("Stopped audio receiving")
 		c.setState(DeviceStateIdle)
 		if err := c.SendStartListening(ListenModeAuto); err != nil {
@@ -913,67 +882,30 @@ func NewProtocol(config Config) (interfaces.TransportProtocol, error) {
 	}
 }
 
-// 添加startAudioCapture方法
+// 添加 startAudioCapture 方法
 func (c *Client) startAudioCapture() {
 	c.logger.Info("Starting audio capture")
 
-	// 创建音频数据通道
-	audioDataChan := make(chan []byte, 100)
-
-	// 启动音频采集
-	ctx, cancel := context.WithCancel(context.Background())
-
-	go func() {
-		if err := c.audioRecorder.Record(ctx, audioDataChan); err != nil {
-			c.logger.Error("Audio recording failed", "error", err)
-		}
-	}()
-
-	// 处理采集到的音频数据
-	for {
-		select {
-		case <-c.closeChan:
-			c.logger.Info("Stopping audio capture due to client shutdown")
-			cancel()                           // 先取消 context，让 recorder 停止
-			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
-			close(audioDataChan)
-			return
-		case <-c.audioStopChan:
-			c.logger.Info("Stopping audio capture")
-			cancel()                           // 先取消 context，让 recorder 停止
-			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
-			close(audioDataChan)
-			return
-		case data, ok := <-audioDataChan:
-			if !ok {
-				c.logger.Info("Audio data channel closed")
-				return
-			}
-
-			// 关键修改：只有在Listening状态且可以发送时才发送音频
-			if c.GetState() == DeviceStateListening && c.audioCtrl.IsSending() {
-				if err := c.SendAudio(data); err != nil {
-					c.logger.Warn("Failed to send audio data",
-						"error", err,
-						"state", c.GetState())
-				}
-			} else {
-				c.logger.Debug("Skipping audio send",
-					"reason", "wrong state or not sending",
-					"state", c.GetState(),
-					"isSending", c.audioCtrl.IsSending())
-			}
-		}
+	// 使用 audioManager 统一管理音频采集
+	if c.audioManager == nil {
+		c.logger.Error("Audio manager not initialized")
+		return
 	}
+
+	// 启动录音
+	if err := c.audioManager.StartRecording(c.audioSendChan); err != nil {
+		c.logger.Error("Failed to start recording", "error", err)
+		return
+	}
+
+	c.logger.Info("Audio capture started")
 }
 
-// 添加StopAudioCapture方法
+// 添加 StopAudioCapture 方法
 func (c *Client) StopAudioCapture() {
-	select {
-	case c.audioStopChan <- struct{}{}:
-		c.logger.Info("Sent stop signal to audio capture")
-	default:
-		c.logger.Warn("Audio stop channel is full")
+	if c.audioManager != nil {
+		c.audioManager.StopRecording()
+		c.logger.Info("Audio capture stopped")
 	}
 }
 
@@ -1885,30 +1817,10 @@ func (c *Client) disconnectForMusic() {
 		}
 	}
 
-	// 停止音频发送和接收
-	c.audioCtrl.StopSending()
-	c.audioCtrl.StopReceiving()
-
-	// 停止音频采集
-	c.StopAudioCapture()
-
-	// 关闭音频播放器，释放 PortAudio 设备
-	// 注意：必须关闭播放器以释放音频输出设备，否则 ffplay 无法打开设备
-	if c.audioPlayer != nil {
-		if err := c.audioPlayer.Close(); err != nil {
-			c.logger.Warn("Failed to close audio player", "error", err)
-		}
-		c.audioPlayer = nil
+	// 停止录音
+	if c.audioManager != nil {
+		c.audioManager.StopRecording()
 	}
-
-	// 关闭音频解码器，释放 OPUS 资源
-	if c.audioDecoder != nil {
-		c.audioDecoder.Close()
-		c.audioDecoder = nil
-	}
-
-	// 注意：audioRecorder 和 audioCtrl 不需要显式关闭
-	// 因为 StopAudioCapture 已经停止了录音上下文，malgo 设备会自动释放
 
 	// 关闭 WebSocket 连接
 	if c.transport != nil {
@@ -1925,8 +1837,17 @@ func (c *Client) disconnectForMusic() {
 	c.stateMutex.Unlock()
 
 	// 等待音频设备完全释放
-	// 确保所有音频资源（PortAudio、malgo）都被系统回收
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
+
+	// 关闭音频管理器，释放所有音频设备资源
+	if c.audioManager != nil {
+		if err := c.audioManager.Close(); err != nil {
+			c.logger.Warn("Failed to close audio manager", "error", err)
+		}
+	}
+
+	// 再次等待确保设备释放
+	time.Sleep(1500 * time.Millisecond)
 
 	c.logger.Info("Disconnected for music playback, audio device released")
 }
@@ -1943,28 +1864,12 @@ func (c *Client) reconnectAfterMusic() {
 		c.logger.Warn("Failed to show neutral emotion after music", "error", err)
 	}
 
-	// 重新初始化音频播放器
-	var err error
-	c.audioPlayer, err = audio.NewPCMPlayer(
-		c.config.Audio.SampleRate,
-		c.config.Audio.FrameDuration,
-		c.config.Audio.Channels,
-		c.logger,
-	)
-	if err != nil {
-		c.logger.Error("Failed to recreate audio player", "error", err)
-		return
-	}
-
-	// 重新初始化音频解码器
-	c.audioDecoder, err = audio.NewOpusDecoder(
-		c.config.Audio.SampleRate,
-		c.config.Audio.Channels,
-		c.logger,
-	)
-	if err != nil {
-		c.logger.Error("Failed to recreate audio decoder", "error", err)
-		return
+	// 重新初始化音频管理器（重新创建播放器和解码器）
+	if c.audioManager != nil {
+		if err := c.audioManager.Reinitialize(); err != nil {
+			c.logger.Error("Failed to reinitialize audio manager", "error", err)
+			return
+		}
 	}
 
 	// 重新建立 WebSocket 连接
