@@ -25,6 +25,7 @@ type KeyEvent struct {
 
 type StateGetter interface {
 	GetCurrentState() string
+	GetDisplayMode() string
 }
 
 type KeyboardListener struct {
@@ -92,9 +93,14 @@ func (k *KeyboardListener) Start() error {
 						continue
 					}
 
-					// 处理单次按键 - 根据当前状态决定动作
+					// 处理单次按键 - 根据当前状态和显示模式决定动作
 					currentState := k.stateGetter.GetCurrentState()
-					if currentState == "idle" || currentState == "disconnected" {
+					displayMode := k.stateGetter.GetDisplayMode()
+
+					// 特殊处理：时钟模式下单击切换回表情模式并唤醒
+					if displayMode == "clock" && (currentState == "idle" || currentState == "disconnected") {
+						k.actionFunc("wakeup_from_clock")
+					} else if currentState == "idle" || currentState == "disconnected" {
 						k.actionFunc("wakeup")
 					} else if currentState != "listening" {
 						// 非 idle/listening 状态下，单击触发 interrupt（中断当前操作）

@@ -94,6 +94,37 @@ func main() {
 			} else {
 				logger.Info("Operation interrupted")
 			}
+		case "wakeup_from_clock":
+			// 从时钟模式唤醒：切换回表情模式并启动监听
+			logger.Info("Waking up from clock mode...")
+			// 切换到表情模式
+			client.SetDisplayMode(core.DisplayModeEmotion)
+			// 显示中性表情
+			if err := client.ShowEmotion("neutral"); err != nil {
+				logger.Debug("Failed to show neutral emotion", "error", err)
+			}
+			// 确保连接
+			if !client.IsConnected() {
+				logger.Warn("Not connected, attempting to reconnect...")
+				// 异步尝试重连
+				go func() {
+					ctx := context.Background()
+					if err := client.Connect(ctx); err != nil {
+						logger.Error("Reconnect failed", "error", err)
+						return
+					}
+					client.SetState(core.DeviceStateIdle)
+					logger.Info("Reconnect successful, ready to listen")
+				}()
+				// 等待一下确保连接建立
+				time.Sleep(500 * time.Millisecond)
+			}
+			// 启动自动监听
+			if err := client.SendStartListening(core.ListenModeAuto); err != nil {
+				logger.Warn("Failed to start listening", "error", err)
+			} else {
+				logger.Info("Started listening from clock mode")
+			}
 		case "reset":
 			// 双击按键：重置为初始状态
 			logger.Info("Resetting to initial state...")

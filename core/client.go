@@ -493,7 +493,7 @@ func (c *Client) setState(newState DeviceState) {
 			"to", newState)
 
 		// 只在表情模式下才根据状态显示表情
-		if c.GetDisplayMode() == DisplayModeEmotion {
+		if c.GetDisplayModeEnum() == DisplayModeEmotion {
 			switch newState {
 			case DeviceStateSpeaking:
 				c.logger.Info("Attempting to show speaking emotion")
@@ -512,7 +512,7 @@ func (c *Client) setState(newState DeviceState) {
 				}
 			}
 		} else {
-			c.logger.Debug("Not in emotion mode, skipping auto emotion update", "mode", c.GetDisplayMode())
+			c.logger.Debug("Not in emotion mode, skipping auto emotion update", "mode", c.GetDisplayModeEnum())
 		}
 	}
 }
@@ -816,7 +816,7 @@ func (c *Client) handleSTTMessage(msg map[string]interface{}) error {
 		"session", sessionID)
 
 	// 在对话模式下，显示用户的语音
-	if c.GetDisplayMode() == DisplayModeDialog {
+	if c.GetDisplayModeEnum() == DisplayModeDialog {
 		c.appendDialog("我", text)
 	}
 
@@ -848,7 +848,7 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 		"session", sessionID)
 
 	// 根据显示模式处理
-	switch c.GetDisplayMode() {
+	switch c.GetDisplayModeEnum() {
 	case DisplayModeEmotion:
 		// 表情模式：只更新表情
 		if err := c.ShowEmotion(emotion); err != nil {
@@ -858,7 +858,7 @@ func (c *Client) handleLLMMessage(msg map[string]interface{}) error {
 		// 对话模式：显示AI回复
 		c.appendDialog("AI", text)
 	default:
-		c.logger.Debug("Not in emotion mode, skipping emotion update", "currentMode", c.GetDisplayMode())
+		c.logger.Debug("Not in emotion mode, skipping emotion update", "currentMode", c.GetDisplayModeEnum())
 	}
 
 	return nil
@@ -1048,8 +1048,15 @@ func (c *Client) ShowImage(imagePath string) error {
 	return c.displayCtrl.ShowImage(imagePath, rotation)
 }
 
-// GetDisplayMode 获取当前显示模式
-func (c *Client) GetDisplayMode() DisplayMode {
+// GetDisplayMode 获取当前显示模式字符串（用于键盘监听器）
+func (c *Client) GetDisplayMode() string {
+	c.displayModeMu.RLock()
+	defer c.displayModeMu.RUnlock()
+	return string(c.displayMode)
+}
+
+// GetDisplayModeEnum 获取当前显示模式枚举值（内部使用）
+func (c *Client) GetDisplayModeEnum() DisplayMode {
 	c.displayModeMu.RLock()
 	defer c.displayModeMu.RUnlock()
 	return c.displayMode
@@ -1118,6 +1125,9 @@ func (c *Client) ShowDateTime() error {
 
 	// 切换到时钟模式
 	c.SetDisplayMode(DisplayModeClock)
+
+	// 将设备状态设置为 idle，允许后续唤醒
+	c.setState(DeviceStateIdle)
 
 	color := ColorRGB(255, 255, 255)
 	return c.displayCtrl.ShowDateTime(
@@ -1865,7 +1875,7 @@ func (c *Client) setDisplayModeTool(args map[string]interface{}) (interface{}, e
 // getDisplayStatus 获取显示状态
 func (c *Client) getDisplayStatus() map[string]interface{} {
 	return map[string]interface{}{
-		"mode":         string(c.GetDisplayMode()),
+		"mode":         string(c.GetDisplayModeEnum()),
 		"device_state": string(c.GetState()),
 	}
 }
