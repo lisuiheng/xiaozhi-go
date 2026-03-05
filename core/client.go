@@ -415,26 +415,10 @@ func (c *Client) setState(newState DeviceState) {
 			// 进入 Speaking 状态时停止音频发送
 			c.audioCtrl.StopSending()
 			c.logger.Debug("Auto-stopped audio sending for speaking state")
-			// 显示说话表情
-			c.logger.Info("Attempting to show speaking emotion")
-			if err := c.ShowEmotion("speaking"); err != nil {
-				c.logger.Warn("Failed to show speaking emotion", "error", err)
-			}
 		case DeviceStateListening:
 			// 进入 Listening 状态时确保可以发送
 			if !c.audioCtrl.StartSending() {
 				c.logger.Warn("Failed to start audio sending when entering listening state")
-			}
-			// 显示聆听表情
-			c.logger.Info("Attempting to show listening emotion")
-			if err := c.ShowEmotion("listening"); err != nil {
-				c.logger.Warn("Failed to show listening emotion", "error", err)
-			}
-		case DeviceStateIdle:
-			// 空闲状态显示中性表情
-			c.logger.Info("Attempting to show neutral emotion")
-			if err := c.ShowEmotion("neutral"); err != nil {
-				c.logger.Debug("Failed to show neutral emotion", "error", err)
 			}
 		}
 
@@ -442,6 +426,29 @@ func (c *Client) setState(newState DeviceState) {
 		c.logger.Info("State changed",
 			"from", oldState,
 			"to", newState)
+
+		// 只在表情模式下才根据状态显示表情
+		if c.GetDisplayMode() == DisplayModeEmotion {
+			switch newState {
+			case DeviceStateSpeaking:
+				c.logger.Info("Attempting to show speaking emotion")
+				if err := c.ShowEmotion("speaking"); err != nil {
+					c.logger.Warn("Failed to show speaking emotion", "error", err)
+				}
+			case DeviceStateListening:
+				c.logger.Info("Attempting to show listening emotion")
+				if err := c.ShowEmotion("listening"); err != nil {
+					c.logger.Warn("Failed to show listening emotion", "error", err)
+				}
+			case DeviceStateIdle:
+				c.logger.Info("Attempting to show neutral emotion")
+				if err := c.ShowEmotion("neutral"); err != nil {
+					c.logger.Debug("Failed to show neutral emotion", "error", err)
+				}
+			}
+		} else {
+			c.logger.Debug("Not in emotion mode, skipping auto emotion update", "mode", c.GetDisplayMode())
+		}
 	}
 }
 
