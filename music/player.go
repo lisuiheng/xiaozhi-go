@@ -462,7 +462,7 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	case ".mp3":
 		// 优先使用 ffplay
 		if _, err := exec.LookPath("ffplay"); err == nil {
-			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", filePath)
+			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "warning", filePath)
 			p.logger.Info("Using ffplay for MP3 playback")
 		} else {
 			// 尝试 ffmpeg + aplay
@@ -492,6 +492,10 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	p.logger.Info("Starting player command")
 
 	output, err := p.cmd.CombinedOutput()
+	// 打印播放器输出，无论成功与否
+	if len(output) > 0 {
+		p.logger.Info("Player output", "output", string(output))
+	}
 	if err != nil {
 		p.logger.Error("Player command failed", "error", err, "output", string(output))
 		return fmt.Errorf("player failed: %w, output: %s", err, string(output))

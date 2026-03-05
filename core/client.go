@@ -483,7 +483,9 @@ func (c *Client) setState(newState DeviceState) {
 // 发送 JSON 消息
 func (c *Client) sendJSON(data interface{}) error {
 	if c.transport == nil {
-		c.logger.Error("Cannot send message, not connected to server")
+		// 打印尝试发送的数据
+		formattedJSON, _ := json.MarshalIndent(data, "", "  ")
+		c.logger.Error("Cannot send message, not connected to server", "data", string(formattedJSON))
 		return errors.New("not connected to server")
 	}
 

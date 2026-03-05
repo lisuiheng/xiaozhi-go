@@ -1,2 +1,1 @@
 GOOS=linux GOARCH=arm GOARM=7 go build -o ./bin/xiaozhi-go cmd/xiaozhi/main.go
-11
