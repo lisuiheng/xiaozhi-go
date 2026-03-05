@@ -1603,7 +1603,7 @@ func (c *Client) handleMCPToolsCall(req MCPRequest) error {
 		result = c.getDisplayStatus()
 	// 音乐相关工具
 	case "self.music.play":
-		result, err = c.musicPlayTool(params.Arguments)
+		result, err = c.musicPlayTool(params.Arguments, req.ID)
 	case "self.music.pause":
 		result, err = c.musicPauseTool(params.Arguments)
 	case "self.music.stop":
@@ -1615,7 +1615,7 @@ func (c *Client) handleMCPToolsCall(req MCPRequest) error {
 	case "self.music.list":
 		result = c.musicListTool()
 	case "self.music.play_song":
-		result, err = c.musicPlaySongTool(params.Arguments)
+		result, err = c.musicPlaySongTool(params.Arguments, req.ID)
 	default:
 		// 尝试从注册表调用
 		result, err = CallMCPTool(params.Name, params.Arguments)
@@ -1904,7 +1904,8 @@ func (c *Client) ShowMusicAnimation(songName string) error {
 }
 
 // musicPlayTool 播放音乐
-func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error) {
+// mcpID 用于在断开连接前先发送 MCP 响应
+func (c *Client) musicPlayTool(args map[string]interface{}, mcpID interface{}) (interface{}, error) {
 	if c.musicPlayer == nil {
 		return nil, errors.New("music player is not initialized")
 	}
@@ -1920,13 +1921,23 @@ func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error)
 		return nil, err
 	}
 
-	// 播放成功后，断开 WebSocket 连接，释放音频设备
-	c.disconnectForMusic()
+	// 先发送 MCP 响应，再断开连接
+	c.logger.Info("Sending MCP response before disconnecting")
+	response := map[string]interface{}{
+		"playing": true,
+		"success": true,
+	}
+	if err := c.sendMCPResponse(mcpID, response); err != nil {
+		c.logger.Warn("Failed to send MCP response before disconnect", "error", err)
+	}
 
 	// 显示音乐动画
 	if song := c.musicPlayer.GetCurrentSong(); song != nil {
 		go c.ShowMusicAnimation(song.Name)
 	}
+
+	// 断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
 
 	// 注册一个回调，在音乐播放结束后自动重连
 	go func() {
@@ -1942,10 +1953,8 @@ func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error)
 		}
 	}()
 
-	return map[string]interface{}{
-		"playing": true,
-		"success": true,
-	}, nil
+	// 返回空结果，因为响应已经通过 sendMCPResponse 发送了
+	return nil, nil
 }
 
 // musicPauseTool 暂停音乐
@@ -2048,7 +2057,8 @@ func (c *Client) musicListTool() interface{} {
 }
 
 // musicPlaySongTool 播放指定歌曲
-func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, error) {
+// mcpID 用于在断开连接前先发送 MCP 响应
+func (c *Client) musicPlaySongTool(args map[string]interface{}, mcpID interface{}) (interface{}, error) {
 	if c.musicPlayer == nil {
 		return nil, errors.New("music player is not initialized")
 	}
@@ -2063,14 +2073,21 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 	indexInt := int(index)
 
 	// 先尝试播放音乐，如果成功再断开连接
-	// 这样可以避免在播放失败时无法发送响应的问题
 	if err := c.musicPlayer.PlaySong(indexInt); err != nil {
 		c.logger.Error("Failed to start music playback", "error", err)
 		return nil, err
 	}
 
-	// 播放成功后，断开 WebSocket 连接，释放音频设备
-	c.disconnectForMusic()
+	// 先发送 MCP 响应，再断开连接
+	// 这样可以确保响应能够成功发送
+	c.logger.Info("Sending MCP response before disconnecting")
+	response := map[string]interface{}{
+		"success": true,
+		"index":   indexInt,
+	}
+	if err := c.sendMCPResponse(mcpID, response); err != nil {
+		c.logger.Warn("Failed to send MCP response before disconnect", "error", err)
+	}
 
 	// 切换到音乐模式
 	c.SetDisplayMode(DisplayModeMusic)
@@ -2079,6 +2096,9 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 	if song := c.musicPlayer.GetCurrentSong(); song != nil {
 		go c.ShowMusicAnimation(song.Name)
 	}
+
+	// 断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
 
 	// 注册一个回调，在音乐播放结束后自动重连
 	go func() {
@@ -2094,10 +2114,8 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 		}
 	}()
 
-	return map[string]interface{}{
-		"success": true,
-		"index":   indexInt,
-	}, nil
+	// 返回空结果，因为响应已经通过 sendMCPResponse 发送了
+	return nil, nil
 }
 
 // sendMCPResponse 发送 MCP 响应
