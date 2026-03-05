@@ -415,6 +415,24 @@ func (c *Client) IsConnected() bool {
 	return c.transport != nil && (c.state == DeviceStateIdle || c.state == DeviceStateListening || c.state == DeviceStateSpeaking)
 }
 
+// IsPlayingMusic 检查是否正在播放音乐
+func (c *Client) IsPlayingMusic() bool {
+	if c.musicPlayer == nil {
+		return false
+	}
+	return c.musicPlayer.IsPlaying()
+}
+
+// StopMusic 停止音乐播放
+func (c *Client) StopMusic() {
+	if c.musicPlayer != nil {
+		c.logger.Info("Stopping music playback")
+		c.musicPlayer.Stop()
+		// 停止音乐后，如果有需要可以恢复显示模式
+		c.SetDisplayMode(DisplayModeEmotion)
+	}
+}
+
 // SetState 设置设备状态（公开方法）
 func (c *Client) SetState(state DeviceState) {
 	c.setState(state)
@@ -1890,13 +1908,21 @@ func (c *Client) reconnectAfterMusic() {
 		c.logger.Warn("Failed to show neutral emotion after music", "error", err)
 	}
 
-	// 重新初始化音频管理器（重新创建播放器和解码器）
-	if c.audioManager != nil {
-		if err := c.audioManager.Reinitialize(); err != nil {
-			c.logger.Error("Failed to reinitialize audio manager", "error", err)
-			return
-		}
+	// 重新创建音频管理器（因为之前的已经被完全关闭）
+	var err error
+	c.audioManager, err = audio.NewManager(
+		audio.Config{
+			SampleRate:    c.config.Audio.SampleRate,
+			Channels:      c.config.Audio.Channels,
+			FrameDuration: c.config.Audio.FrameDuration,
+		},
+		c.logger,
+	)
+	if err != nil {
+		c.logger.Error("Failed to recreate audio manager", "error", err)
+		return
 	}
+	c.logger.Info("Audio manager recreated successfully")
 
 	// 重新建立 WebSocket 连接
 	ctx := context.Background()

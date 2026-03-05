@@ -61,6 +61,11 @@ func main() {
 		logger.Info("Keyboard action triggered", "action", action)
 		switch action {
 		case "wakeup":
+			// 检查是否正在播放音乐，如果是则先停止
+			if client.IsPlayingMusic() {
+				logger.Info("Music is playing, stopping it before wakeup")
+				client.StopMusic()
+			}
 			// 从 idle 状态唤醒，开始监听
 			if !client.IsConnected() {
 				logger.Warn("Not connected, attempting to reconnect...")

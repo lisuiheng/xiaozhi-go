@@ -520,6 +520,12 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 		}
 
 		p.logger.Info("Player command completed successfully")
+
+		// 播放完成后，更新播放状态
+		p.mu.Lock()
+		p.playing = false
+		p.mu.Unlock()
+
 		return nil
 	}
 
@@ -583,6 +589,12 @@ func (p *Player) playMp3WithFFmpegAplay(filePath string) error {
 	}
 
 	p.logger.Info("ffmpeg + aplay pipeline completed successfully")
+
+	// 播放完成后，更新播放状态
+	p.mu.Lock()
+	p.playing = false
+	p.mu.Unlock()
+
 	return nil
 }
 
@@ -596,5 +608,11 @@ func (p *Player) playWav(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("aplay failed: %w, output: %s", err, string(output))
 	}
+
+	// 播放完成后，更新播放状态
+	p.mu.Lock()
+	p.playing = false
+	p.mu.Unlock()
+
 	return nil
 }
