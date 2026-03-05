@@ -1844,8 +1844,32 @@ func (c *Client) getDisplayStatus() map[string]interface{} {
 func (c *Client) disconnectForMusic() {
 	c.logger.Info("Disconnecting for music playback")
 
+	// 先切换到音乐模式，防止状态变化触发表情显示
+	c.SetDisplayMode(DisplayModeMusic)
+
+	// 发送 abort 消息通知服务器中断会话
+	if c.transport != nil && c.sessionID != "" {
+		abortMsg := map[string]interface{}{
+			"type":       "abort",
+			"session_id": c.sessionID,
+			"reason":     "music_playback",
+		}
+		if err := c.sendJSON(abortMsg); err != nil {
+			c.logger.Warn("Failed to send abort message", "error", err)
+		}
+	}
+
+	// 停止音频发送
+	c.audioCtrl.StopSending()
+	c.audioCtrl.StopReceiving()
+
 	// 停止音频采集
 	c.StopAudioCapture()
+
+	// 关闭音频播放器
+	if c.audioPlayer != nil {
+		c.audioPlayer.Close()
+	}
 
 	// 关闭 WebSocket 连接
 	if c.transport != nil {
@@ -1855,8 +1879,13 @@ func (c *Client) disconnectForMusic() {
 		c.transport = nil
 	}
 
-	c.setState(DeviceStateIdle)
-	c.logger.Info("Disconnected for music playback")
+	// 设置状态但不触发表情（已在音乐模式）
+	c.stateMutex.Lock()
+	c.state = DeviceStateIdle
+	c.sessionID = ""
+	c.stateMutex.Unlock()
+
+	c.logger.Info("Disconnected for music playback, audio device released")
 }
 
 // reconnectAfterMusic 音乐结束后重新连接
@@ -2031,6 +2060,11 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 		return nil, errors.New("music player is not initialized")
 	}
 
+	c.logger.Info("musicPlaySongTool: preparing to play music")
+
+	// 断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
+
 	index, ok := args["index"].(float64)
 	if !ok {
 		return nil, errors.New("index must be a number")
@@ -2038,6 +2072,7 @@ func (c *Client) musicPlaySongTool(args map[string]interface{}) (interface{}, er
 
 	indexInt := int(index)
 	if err := c.musicPlayer.PlaySong(indexInt); err != nil {
+		c.logger.Error("Failed to start music playback", "error", err)
 		return nil, err
 	}
 

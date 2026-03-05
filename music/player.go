@@ -461,14 +461,30 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
-		// 优先使用 ffplay（ffmpeg 的一部分），更稳定
-		if _, err := exec.LookPath("ffplay"); err == nil {
+		// 优先使用 ffmpeg 直接输出到 ALSA
+		if _, err := exec.LookPath("ffmpeg"); err == nil {
+			playerCmd = "ffmpeg"
+			playerArgs = []string{
+				"-i", filePath,
+				"-f", "alsa",
+				"-acodec", "pcm_s16le",
+				"-ar", "44100",
+				"-ac", "2",
+				"default",
+				"-loglevel", "quiet",
+			}
+			p.logger.Info("Using ffmpeg for MP3 playback with ALSA")
+		} else if _, err := exec.LookPath("ffplay"); err == nil {
 			playerCmd = "ffplay"
-			playerArgs = []string{"-nodisp", "-autoexit", "-loglevel", "quiet", filePath}
+			playerArgs = []string{
+				"-nodisp", "-autoexit",
+				"-loglevel", "quiet",
+				filePath,
+			}
 			p.logger.Info("Using ffplay for MP3 playback")
 		} else if _, err := exec.LookPath("mpg123"); err == nil {
 			playerCmd = "mpg123"
-			playerArgs = []string{"-q", filePath}
+			playerArgs = []string{"-q", "-a", "default", filePath}
 			p.logger.Info("Using mpg123 for MP3 playback")
 		} else if _, err := exec.LookPath("madplay"); err == nil {
 			playerCmd = "madplay"
@@ -476,7 +492,7 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 			p.logger.Info("Using madplay for MP3 playback")
 		} else {
 			p.mu.Unlock()
-			return fmt.Errorf("no MP3 player found (need ffplay, mpg123, or madplay)")
+			return fmt.Errorf("no MP3 player found (need ffmpeg, ffplay, mpg123, or madplay)")
 		}
 		p.cmd = exec.Command(playerCmd, playerArgs...)
 	default:
