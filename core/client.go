@@ -1137,6 +1137,8 @@ func (c *Client) ShowDateTime() error {
 		c.config.Display.TextAlign.Vertical,
 		c.config.Display.TimeFormat,
 		c.config.Display.DateFormat,
+		true, // 显示秒数
+		true, // 分行显示（日期在上，时间在下，时间用大字体）
 	)
 }
 
