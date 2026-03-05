@@ -27,36 +27,28 @@ type StateGetter interface {
 	GetCurrentState() string
 }
 
-// DisplayModeGetter 获取显示模式的接口
-type DisplayModeGetter interface {
-	GetDisplayModeString() string
-	StopMusic()
-}
-
 type KeyboardListener struct {
-	devicePath        string
-	eventChan         chan KeyEvent
-	stopChan          chan struct{}
-	wg                sync.WaitGroup
-	mu                sync.Mutex
-	running           bool
-	stateGetter       StateGetter
-	displayModeGetter DisplayModeGetter
-	actionFunc        func(string)
-	lastKeyTime       time.Time     // 上次按键时间
-	lastKeyCode       uint16        // 上次按键代码
-	doubleTapTime     time.Duration // 双击时间间隔
+	devicePath    string
+	eventChan     chan KeyEvent
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	running       bool
+	stateGetter   StateGetter
+	actionFunc    func(string)
+	lastKeyTime   time.Time     // 上次按键时间
+	lastKeyCode   uint16        // 上次按键代码
+	doubleTapTime time.Duration // 双击时间间隔
 }
 
-func NewKeyboardListener(devicePath string, stateGetter StateGetter, displayModeGetter DisplayModeGetter, actionFunc func(string)) *KeyboardListener {
+func NewKeyboardListener(devicePath string, stateGetter StateGetter, actionFunc func(string)) *KeyboardListener {
 	return &KeyboardListener{
-		devicePath:        devicePath,
-		eventChan:         make(chan KeyEvent, 10),
-		stopChan:          make(chan struct{}),
-		doubleTapTime:     600 * time.Millisecond, // 双击间隔 600ms
-		stateGetter:       stateGetter,
-		displayModeGetter: displayModeGetter,
-		actionFunc:        actionFunc,
+		devicePath:    devicePath,
+		eventChan:     make(chan KeyEvent, 10),
+		stopChan:      make(chan struct{}),
+		doubleTapTime: 600 * time.Millisecond, // 双击间隔 600ms
+		stateGetter:   stateGetter,
+		actionFunc:    actionFunc,
 	}
 }
 
@@ -98,18 +90,6 @@ func (k *KeyboardListener) Start() error {
 						k.actionFunc("idle")        // 双击进入空闲状态
 						k.lastKeyTime = time.Time{} // 重置时间，避免连续触发
 						continue
-					}
-
-					// 检查是否在音乐模式
-					if k.displayModeGetter != nil {
-						displayMode := k.displayModeGetter.GetDisplayModeString()
-						if displayMode == "music" {
-							// 在音乐模式下，单击停止音乐
-							k.displayModeGetter.StopMusic()
-							k.lastKeyCode = event.Code
-							k.lastKeyTime = now
-							continue
-						}
 					}
 
 					// 处理单次按键 - 根据当前状态决定动作

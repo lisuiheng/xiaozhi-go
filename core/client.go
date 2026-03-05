@@ -1047,25 +1047,6 @@ func (c *Client) GetDisplayMode() DisplayMode {
 	return c.displayMode
 }
 
-// GetDisplayModeString 获取当前显示模式字符串（用于接口）
-func (c *Client) GetDisplayModeString() string {
-	c.displayModeMu.RLock()
-	defer c.displayModeMu.RUnlock()
-	return string(c.displayMode)
-}
-
-// StopMusic 停止音乐播放并恢复连接
-func (c *Client) StopMusic() {
-	c.logger.Info("StopMusic called")
-
-	if c.musicPlayer != nil {
-		c.musicPlayer.Stop()
-	}
-
-	// 恢复连接
-	go c.reconnectAfterMusic()
-}
-
 // SetDisplayMode 设置显示模式
 func (c *Client) SetDisplayMode(mode DisplayMode) {
 	c.displayModeMu.Lock()
