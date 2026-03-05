@@ -1840,9 +1840,53 @@ func (c *Client) getDisplayStatus() map[string]interface{} {
 // 音乐相关工具
 // ============================================================================
 
+// disconnectForMusic 断开连接以释放音频设备用于播放音乐
+func (c *Client) disconnectForMusic() {
+	c.logger.Info("Disconnecting for music playback")
+
+	// 停止音频采集
+	c.StopAudioCapture()
+
+	// 关闭 WebSocket 连接
+	if c.transport != nil {
+		if err := c.transport.Close(); err != nil {
+			c.logger.Warn("Failed to close transport for music", "error", err)
+		}
+		c.transport = nil
+	}
+
+	c.setState(DeviceStateIdle)
+	c.logger.Info("Disconnected for music playback")
+}
+
+// reconnectAfterMusic 音乐结束后重新连接
+func (c *Client) reconnectAfterMusic() {
+	c.logger.Info("Reconnecting after music playback")
+
+	// 切换回表情模式
+	c.SetDisplayMode(DisplayModeEmotion)
+
+	// 显示默认表情
+	if err := c.ShowEmotion("neutral"); err != nil {
+		c.logger.Warn("Failed to show neutral emotion after music", "error", err)
+	}
+
+	// 重新建立 WebSocket 连接
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		c.logger.Error("Failed to reconnect after music", "error", err)
+		return
+	}
+
+	c.logger.Info("Reconnected after music playback")
+}
+
 // ShowMusicAnimation 显示音乐可视化效果
 func (c *Client) ShowMusicAnimation(songName string) error {
+	c.logger.Info("ShowMusicAnimation called", "songName", songName)
+
 	if c.config.Display.SkipExecution {
+		c.logger.Info("Display execution skipped")
 		return nil
 	}
 
@@ -1850,9 +1894,11 @@ func (c *Client) ShowMusicAnimation(songName string) error {
 	if c.musicPlayer != nil {
 		levelChan := c.musicPlayer.GetVisualizeChannel()
 		color := struct{ R, G, B uint8 }{R: 0, G: 180, B: 255} // 青色
+		c.logger.Info("Starting music visualizer")
 		return c.displayCtrl.ShowMusicVisualizer(levelChan, songName, color)
 	}
 
+	c.logger.Warn("Music player is nil")
 	return nil
 }
 
@@ -1862,10 +1908,16 @@ func (c *Client) musicPlayTool(args map[string]interface{}) (interface{}, error)
 		return nil, errors.New("music player is not initialized")
 	}
 
+	c.logger.Info("musicPlayTool: preparing to play music")
+
+	// 断开 WebSocket 连接，释放音频设备
+	c.disconnectForMusic()
+
 	// 切换到音乐模式
 	c.SetDisplayMode(DisplayModeMusic)
 
 	if err := c.musicPlayer.Play(); err != nil {
+		c.logger.Error("Failed to start music playback", "error", err)
 		return nil, err
 	}
 
@@ -1901,6 +1953,9 @@ func (c *Client) musicStopTool(args map[string]interface{}) (interface{}, error)
 	}
 
 	c.musicPlayer.Stop()
+
+	// 停止音乐后恢复 WebSocket 连接
+	go c.reconnectAfterMusic()
 
 	return map[string]interface{}{
 		"stopped": true,

@@ -174,8 +174,10 @@ func (p *Player) PlaySong(index int) error {
 	p.paused = false
 	p.stopChan = make(chan struct{})
 
+	song := p.songs[p.currentIndex]
+	p.logger.Info("PlaySong called", "index", index, "name", song.Name, "path", song.Path)
+
 	go p.playLoop()
-	p.logger.Info("Playing song", "song", p.songs[p.currentIndex].Name)
 
 	return nil
 }
@@ -254,26 +256,31 @@ func (p *Player) Previous() error {
 
 // playLoop 播放循环
 func (p *Player) playLoop() {
+	p.logger.Info("playLoop started")
 	for {
 		select {
 		case <-p.stopChan:
+			p.logger.Info("playLoop stopped by stopChan")
 			return
 		default:
 			p.mu.Lock()
 			if !p.playing || p.paused {
 				p.mu.Unlock()
+				p.logger.Info("playLoop exiting", "playing", p.playing, "paused", p.paused)
 				return
 			}
 
 			if p.currentIndex < 0 || p.currentIndex >= len(p.songs) {
 				p.playing = false
 				p.mu.Unlock()
+				p.logger.Info("playLoop: invalid index, stopping")
 				return
 			}
 
 			song := p.songs[p.currentIndex]
 			p.mu.Unlock()
 
+			p.logger.Info("playLoop: calling playFileWithVisualize", "song", song.Name, "path", song.Path)
 			if err := p.playFileWithVisualize(song.Path); err != nil {
 				p.logger.Warn("Failed to play song, stopping playback", "song", song.Name, "error", err)
 				// 播放失败时停止，不继续重试
@@ -298,12 +305,16 @@ func (p *Player) playLoop() {
 func (p *Player) playFileWithVisualize(filePath string) error {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
+	p.logger.Info("playFileWithVisualize called", "filePath", filePath, "ext", ext)
+
 	// WAV 文件使用内部播放器以获取音频数据
 	if ext == ".wav" {
+		p.logger.Info("Playing WAV file with visualization")
 		return p.playWavWithVisualize(filePath)
 	}
 
 	// 其他格式使用外部播放器，发送模拟可视化数据
+	p.logger.Info("Playing with external player (MP3, etc)")
 	go p.sendSimulatedVisualize()
 	defer func() {
 		select {
@@ -442,29 +453,48 @@ func (p *Player) sendSimulatedVisualize() {
 func (p *Player) playWithExternalPlayer(filePath string) error {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
+	p.logger.Info("playWithExternalPlayer called", "filePath", filePath, "ext", ext)
+
+	var playerCmd string
+	var playerArgs []string
+
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
 		// 优先使用 ffplay（ffmpeg 的一部分），更稳定
 		if _, err := exec.LookPath("ffplay"); err == nil {
-			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filePath)
+			playerCmd = "ffplay"
+			playerArgs = []string{"-nodisp", "-autoexit", "-loglevel", "quiet", filePath}
+			p.logger.Info("Using ffplay for MP3 playback")
 		} else if _, err := exec.LookPath("mpg123"); err == nil {
-			p.cmd = exec.Command("mpg123", "-q", filePath)
+			playerCmd = "mpg123"
+			playerArgs = []string{"-q", filePath}
+			p.logger.Info("Using mpg123 for MP3 playback")
 		} else if _, err := exec.LookPath("madplay"); err == nil {
-			p.cmd = exec.Command("madplay", "-q", filePath)
+			playerCmd = "madplay"
+			playerArgs = []string{"-q", filePath}
+			p.logger.Info("Using madplay for MP3 playback")
 		} else {
 			p.mu.Unlock()
 			return fmt.Errorf("no MP3 player found (need ffplay, mpg123, or madplay)")
 		}
+		p.cmd = exec.Command(playerCmd, playerArgs...)
 	default:
+		playerCmd = "aplay"
 		p.cmd = exec.Command("aplay", filePath)
+		p.logger.Info("Using aplay for playback")
 	}
 	p.mu.Unlock()
 
+	p.logger.Info("Starting player command", "cmd", playerCmd, "args", playerArgs)
+
 	output, err := p.cmd.CombinedOutput()
 	if err != nil {
+		p.logger.Error("Player command failed", "cmd", playerCmd, "error", err, "output", string(output))
 		return fmt.Errorf("player failed: %w, output: %s", err, string(output))
 	}
+
+	p.logger.Info("Player command completed successfully", "cmd", playerCmd)
 	return nil
 }
 
