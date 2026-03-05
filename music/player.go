@@ -455,62 +455,109 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 
 	p.logger.Info("playWithExternalPlayer called", "filePath", filePath, "ext", ext)
 
-	var playerCmd string
-	var playerArgs []string
+	var err error
 
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
-		// 优先使用 ffmpeg 直接输出到 ALSA
-		if _, err := exec.LookPath("ffmpeg"); err == nil {
-			playerCmd = "ffmpeg"
-			playerArgs = []string{
-				"-i", filePath,
-				"-f", "alsa",
-				"-acodec", "pcm_s16le",
-				"-ar", "44100",
-				"-ac", "2",
-				"default",
-				"-loglevel", "quiet",
-			}
-			p.logger.Info("Using ffmpeg for MP3 playback with ALSA")
-		} else if _, err := exec.LookPath("ffplay"); err == nil {
-			playerCmd = "ffplay"
-			playerArgs = []string{
-				"-nodisp", "-autoexit",
-				"-loglevel", "quiet",
-				filePath,
-			}
+		// 优先使用 ffplay（最可靠）
+		if _, err := exec.LookPath("ffplay"); err == nil {
+			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", filePath)
 			p.logger.Info("Using ffplay for MP3 playback")
-		} else if _, err := exec.LookPath("mpg123"); err == nil {
-			playerCmd = "mpg123"
-			playerArgs = []string{"-q", "-a", "default", filePath}
-			p.logger.Info("Using mpg123 for MP3 playback")
-		} else if _, err := exec.LookPath("madplay"); err == nil {
-			playerCmd = "madplay"
-			playerArgs = []string{"-q", filePath}
-			p.logger.Info("Using madplay for MP3 playback")
 		} else {
-			p.mu.Unlock()
-			return fmt.Errorf("no MP3 player found (need ffmpeg, ffplay, mpg123, or madplay)")
+			// 尝试 ffmpeg + aplay
+			_, hasFfmpeg := exec.LookPath("ffmpeg")
+			_, hasAplay := exec.LookPath("aplay")
+			if hasFfmpeg == nil && hasAplay == nil {
+				p.mu.Unlock()
+				p.logger.Info("Using ffmpeg + aplay for MP3 playback")
+				return p.playMp3WithFFmpegAplay(filePath)
+			} else if _, err := exec.LookPath("mpg123"); err == nil {
+				p.cmd = exec.Command("mpg123", filePath)
+				p.logger.Info("Using mpg123 for MP3 playback")
+			} else if _, err := exec.LookPath("madplay"); err == nil {
+				p.cmd = exec.Command("madplay", filePath)
+				p.logger.Info("Using madplay for MP3 playback")
+			} else {
+				p.mu.Unlock()
+				return fmt.Errorf("no MP3 player found (need ffplay, ffmpeg+aplay, mpg123, or madplay)")
+			}
 		}
-		p.cmd = exec.Command(playerCmd, playerArgs...)
 	default:
-		playerCmd = "aplay"
 		p.cmd = exec.Command("aplay", filePath)
 		p.logger.Info("Using aplay for playback")
 	}
 	p.mu.Unlock()
 
-	p.logger.Info("Starting player command", "cmd", playerCmd, "args", playerArgs)
+	p.logger.Info("Starting player command")
 
 	output, err := p.cmd.CombinedOutput()
 	if err != nil {
-		p.logger.Error("Player command failed", "cmd", playerCmd, "error", err, "output", string(output))
+		p.logger.Error("Player command failed", "error", err, "output", string(output))
 		return fmt.Errorf("player failed: %w, output: %s", err, string(output))
 	}
 
-	p.logger.Info("Player command completed successfully", "cmd", playerCmd)
+	p.logger.Info("Player command completed successfully")
+	return nil
+}
+
+// playMp3WithFFmpegAplay 使用 ffmpeg 解码并通过管道输出到 aplay
+func (p *Player) playMp3WithFFmpegAplay(filePath string) error {
+	// 创建 ffmpeg 命令（解码 MP3 为 WAV 格式输出到 stdout）
+	ffmpegCmd := exec.Command("ffmpeg",
+		"-i", filePath,
+		"-f", "wav",
+		"-acodec", "pcm_s16le",
+		"-ar", "24000",
+		"-ac", "1",
+		"-")
+
+	// 创建 aplay 命令（从 stdin 读取并播放）
+	aplayCmd := exec.Command("aplay", "-q", "-r", "24000", "-c", "1", "-f", "S16_LE")
+
+	// 设置管道：ffmpeg stdout -> aplay stdin
+	pipeReader, pipeWriter := io.Pipe()
+	ffmpegCmd.Stdout = pipeWriter
+	aplayCmd.Stdin = pipeReader
+
+	// 保存命令引用以便可以停止
+	p.mu.Lock()
+	p.cmd = aplayCmd
+	p.mu.Unlock()
+
+	p.logger.Info("Starting ffmpeg + aplay pipeline")
+
+	// 启动 ffmpeg
+	if err := ffmpegCmd.Start(); err != nil {
+		pipeReader.Close()
+		pipeWriter.Close()
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// 启动 aplay
+	if err := aplayCmd.Start(); err != nil {
+		ffmpegCmd.Process.Kill()
+		pipeReader.Close()
+		pipeWriter.Close()
+		return fmt.Errorf("failed to start aplay: %w", err)
+	}
+
+	// 等待 ffmpeg 完成
+	ffmpegErr := ffmpegCmd.Wait()
+	pipeWriter.Close()
+
+	// 等待 aplay 完成
+	aplayErr := aplayCmd.Wait()
+	pipeReader.Close()
+
+	if ffmpegErr != nil {
+		return fmt.Errorf("ffmpeg failed: %w", ffmpegErr)
+	}
+	if aplayErr != nil {
+		return fmt.Errorf("aplay failed: %w", aplayErr)
+	}
+
+	p.logger.Info("ffmpeg + aplay pipeline completed successfully")
 	return nil
 }
 
