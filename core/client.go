@@ -917,11 +917,9 @@ func (c *Client) startAudioCapture() {
 
 	// 创建音频数据通道
 	audioDataChan := make(chan []byte, 100)
-	defer close(audioDataChan)
 
 	// 启动音频采集
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go func() {
 		if err := c.audioRecorder.Record(ctx, audioDataChan); err != nil {
@@ -934,9 +932,15 @@ func (c *Client) startAudioCapture() {
 		select {
 		case <-c.closeChan:
 			c.logger.Info("Stopping audio capture due to client shutdown")
+			cancel()                           // 先取消 context，让 recorder 停止
+			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
+			close(audioDataChan)
 			return
 		case <-c.audioStopChan:
 			c.logger.Info("Stopping audio capture")
+			cancel()                           // 先取消 context，让 recorder 停止
+			time.Sleep(100 * time.Millisecond) // 等待 recorder 停止
+			close(audioDataChan)
 			return
 		case data, ok := <-audioDataChan:
 			if !ok {
