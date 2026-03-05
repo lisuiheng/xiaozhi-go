@@ -1,5 +1,5 @@
-//go:build !arm
-// +build !arm
+//go:build arm
+// +build arm
 
 package input
 
@@ -103,8 +103,8 @@ func (k *KeyboardListener) Start() error {
 
 			// 手动解析二进制数据
 			var event KeyEvent
-			event.Time.Sec = int64(binary.LittleEndian.Uint32(buffer[0:4]))
-			event.Time.Usec = int64(binary.LittleEndian.Uint32(buffer[4:8]))
+			event.Time.Sec = int32(binary.LittleEndian.Uint32(buffer[0:4]))
+			event.Time.Usec = int32(binary.LittleEndian.Uint32(buffer[4:8]))
 			event.Type = binary.LittleEndian.Uint16(buffer[16:18])
 			event.Code = binary.LittleEndian.Uint16(buffer[18:20])
 			event.Value = int32(binary.LittleEndian.Uint32(buffer[20:24]))
