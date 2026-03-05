@@ -707,6 +707,8 @@ func (c *Client) handleTTSMessage(msg map[string]interface{}) error {
 	switch state {
 	case "start":
 		c.EndAudioStream()
+		// TTS 开始时停止录音，避免资源冲突
+		c.StopAudioCapture()
 		if c.GetState() == DeviceStateListening {
 			c.logger.Debug("Forcing stop listening due to TTS start")
 			c.setState(DeviceStateSpeaking)
