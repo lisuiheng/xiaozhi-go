@@ -8,6 +8,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -100,8 +101,17 @@ func (k *KeyboardListener) Start() error {
 
 			// 手动解析二进制数据
 			var event KeyEvent
-			event.Time.Sec = int64(binary.LittleEndian.Uint64(buffer[0:8]))
-			event.Time.Usec = int64(binary.LittleEndian.Uint64(buffer[8:16]))
+			// 跨平台兼容：32位系统用Uint32，64位系统用Uint64
+			var zero int
+			if unsafe.Sizeof(zero) == 8 {
+				// 64位系统
+				event.Time.Sec = int64(binary.LittleEndian.Uint64(buffer[0:8]))
+				event.Time.Usec = int64(binary.LittleEndian.Uint64(buffer[8:16]))
+			} else {
+				// 32位系统
+				event.Time.Sec = int64(int32(binary.LittleEndian.Uint32(buffer[0:4])))
+				event.Time.Usec = int64(int32(binary.LittleEndian.Uint32(buffer[4:8])))
+			}
 			event.Type = binary.LittleEndian.Uint16(buffer[16:18])
 			event.Code = binary.LittleEndian.Uint16(buffer[18:20])
 			event.Value = int32(binary.LittleEndian.Uint32(buffer[20:24]))
