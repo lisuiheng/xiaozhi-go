@@ -1886,10 +1886,8 @@ func (c *Client) disconnectForMusic() {
 	// 停止音频采集
 	c.StopAudioCapture()
 
-	// 关闭音频播放器
-	if c.audioPlayer != nil {
-		c.audioPlayer.Close()
-	}
+	// 不关闭 audioPlayer，只是停止接收
+	// 注意：不要调用 c.audioPlayer.Close()，否则无法恢复
 
 	// 关闭 WebSocket 连接
 	if c.transport != nil {
@@ -1904,6 +1902,9 @@ func (c *Client) disconnectForMusic() {
 	c.state = DeviceStateIdle
 	c.sessionID = ""
 	c.stateMutex.Unlock()
+
+	// 等待音频设备完全释放
+	time.Sleep(500 * time.Millisecond)
 
 	c.logger.Info("Disconnected for music playback, audio device released")
 }
