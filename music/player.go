@@ -460,27 +460,28 @@ func (p *Player) playWithExternalPlayer(filePath string) error {
 	p.mu.Lock()
 	switch ext {
 	case ".mp3":
-		// 在无头系统上优先使用 ffmpeg + aplay（更可靠）
-		_, hasFfmpeg := exec.LookPath("ffmpeg")
-		_, hasAplay := exec.LookPath("aplay")
-		if hasFfmpeg == nil && hasAplay == nil {
-			p.mu.Unlock()
-			p.logger.Info("Using ffmpeg + aplay for MP3 playback (headless mode)")
-			return p.playMp3WithFFmpegAplay(filePath)
-		}
-		// 回退到 ffplay
+		// 优先使用 ffplay
 		if _, err := exec.LookPath("ffplay"); err == nil {
-			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filePath)
+			p.cmd = exec.Command("ffplay", "-nodisp", "-autoexit", filePath)
 			p.logger.Info("Using ffplay for MP3 playback")
-		} else if _, err := exec.LookPath("mpg123"); err == nil {
-			p.cmd = exec.Command("mpg123", filePath)
-			p.logger.Info("Using mpg123 for MP3 playback")
-		} else if _, err := exec.LookPath("madplay"); err == nil {
-			p.cmd = exec.Command("madplay", filePath)
-			p.logger.Info("Using madplay for MP3 playback")
 		} else {
-			p.mu.Unlock()
-			return fmt.Errorf("no MP3 player found (need ffmpeg+aplay, ffplay, mpg123, or madplay)")
+			// 尝试 ffmpeg + aplay
+			_, hasFfmpeg := exec.LookPath("ffmpeg")
+			_, hasAplay := exec.LookPath("aplay")
+			if hasFfmpeg == nil && hasAplay == nil {
+				p.mu.Unlock()
+				p.logger.Info("Using ffmpeg + aplay for MP3 playback")
+				return p.playMp3WithFFmpegAplay(filePath)
+			} else if _, err := exec.LookPath("mpg123"); err == nil {
+				p.cmd = exec.Command("mpg123", filePath)
+				p.logger.Info("Using mpg123 for MP3 playback")
+			} else if _, err := exec.LookPath("madplay"); err == nil {
+				p.cmd = exec.Command("madplay", filePath)
+				p.logger.Info("Using madplay for MP3 playback")
+			} else {
+				p.mu.Unlock()
+				return fmt.Errorf("no MP3 player found (need ffplay, ffmpeg+aplay, mpg123, or madplay)")
+			}
 		}
 	default:
 		p.cmd = exec.Command("aplay", filePath)
