@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -45,6 +46,11 @@ type KeyboardListener struct {
 }
 
 func NewKeyboardListener(devicePath string, stateGetter StateGetter, actionFunc func(string)) *KeyboardListener {
+	// 列出可用的输入设备
+	if entries, err := filepath.Glob("/dev/input/event*"); err == nil {
+		logger.Info("Available input devices", "devices", entries)
+	}
+
 	return &KeyboardListener{
 		devicePath:    devicePath,
 		eventChan:     make(chan KeyEvent, 10),
@@ -56,6 +62,8 @@ func NewKeyboardListener(devicePath string, stateGetter StateGetter, actionFunc 
 }
 
 func (k *KeyboardListener) Start() error {
+	logger.Info("Starting keyboard listener", "devicePath", k.devicePath)
+
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -68,6 +76,8 @@ func (k *KeyboardListener) Start() error {
 		return fmt.Errorf("failed to open input device: %w", err)
 	}
 
+	logger.Info("Keyboard device opened successfully")
+
 	k.running = true
 	k.wg.Add(1)
 
@@ -75,10 +85,13 @@ func (k *KeyboardListener) Start() error {
 		defer k.wg.Done()
 		defer file.Close()
 
+		logger.Info("Keyboard listener goroutine started")
+
 		buffer := make([]byte, 24) // KeyEvent 大小
 		for {
 			select {
 			case <-k.stopChan:
+				logger.Info("Keyboard listener stopping")
 				return
 			case <-time.After(100 * time.Millisecond):
 			}
@@ -93,6 +106,7 @@ func (k *KeyboardListener) Start() error {
 					continue
 				}
 				// 其他错误（如设备断开），退出
+				logger.Error("Keyboard read error", "error", err)
 				return
 			}
 
