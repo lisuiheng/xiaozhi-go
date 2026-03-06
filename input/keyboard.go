@@ -1,6 +1,3 @@
-//go:build !arm
-// +build !arm
-
 package input
 
 import (
@@ -20,7 +17,7 @@ const (
 )
 
 type KeyEvent struct {
-	Time  syscall.Timeval
+	_     [16]byte // 时间戳占位，保持24字节对齐
 	Type  uint16
 	Code  uint16
 	Value int32
@@ -103,8 +100,6 @@ func (k *KeyboardListener) Start() error {
 
 			// 手动解析二进制数据
 			var event KeyEvent
-			event.Time.Sec = int64(binary.LittleEndian.Uint32(buffer[0:4]))
-			event.Time.Usec = int64(binary.LittleEndian.Uint32(buffer[4:8]))
 			event.Type = binary.LittleEndian.Uint16(buffer[16:18])
 			event.Code = binary.LittleEndian.Uint16(buffer[18:20])
 			event.Value = int32(binary.LittleEndian.Uint32(buffer[20:24]))
