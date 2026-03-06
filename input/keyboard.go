@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/lisuiheng/xiaozhi-go/logger"
 )
 
 const (
@@ -84,8 +86,17 @@ func (k *KeyboardListener) Start() error {
 					continue
 				}
 
+				logger.Debug("Key event received",
+					"type", event.Type,
+					"code", event.Code,
+					"value", event.Value)
+
 				if event.Type == EV_KEY && event.Value == KEY_RELEASE {
 					now := time.Now()
+					logger.Debug("Key release detected",
+						"code", event.Code,
+						"lastCode", k.lastKeyCode,
+						"timeDiff", now.Sub(k.lastKeyTime))
 					// 检查是否是双击
 					if event.Code == k.lastKeyCode && now.Sub(k.lastKeyTime) < k.doubleTapTime {
 						k.actionFunc("reset")       // 双击重置为初始状态
