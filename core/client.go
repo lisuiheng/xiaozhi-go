@@ -566,8 +566,13 @@ func (c *Client) messageHandler() {
 			select {
 			case msg, ok := <-msgChan:
 				if !ok {
-					// channel 已关闭
-					c.logger.Info("Message channel closed")
+					// channel 已关闭，尝试重连
+					c.logger.Info("Message channel closed, attempting to reconnect")
+					if !c.reconnect() {
+						// 重连失败，退出
+						c.logger.Error("Reconnection failed, stopping message handler")
+						return
+					}
 					continue
 				}
 				switch msg.Type {
@@ -1976,6 +1981,106 @@ func (c *Client) reconnectAfterMusic() {
 	// 重连成功后设置为空闲状态
 	c.setState(DeviceStateIdle)
 	c.logger.Info("Reconnected after music playback")
+}
+
+// reconnect 自动重连
+// 当连接断开时自动尝试重新连接，支持指数退避重试
+func (c *Client) reconnect() bool {
+	c.logger.Info("Attempting to reconnect...")
+
+	// 设置为断开状态
+	c.setState(DeviceStateDisconnected)
+
+	// 清理旧的 transport
+	c.stateMutex.Lock()
+	if c.transport != nil {
+		c.transport.Close()
+		c.transport = nil
+	}
+	c.stateMutex.Unlock()
+
+	// 重连参数
+	maxRetries := 5
+	baseDelay := time.Second
+	maxDelay := 30 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 检查是否已关闭
+		select {
+		case <-c.closeChan:
+			c.logger.Info("Client closed, stopping reconnection")
+			return false
+		default:
+		}
+
+		c.logger.Info("Reconnection attempt", "attempt", attempt, "maxRetries", maxRetries)
+
+		// 创建新的 transport
+		transport, err := NewProtocol(c.config)
+		if err != nil {
+			c.logger.Error("Failed to create transport", "error", err)
+			continue
+		}
+
+		// 尝试连接
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = transport.Connect(ctx)
+		cancel()
+
+		if err != nil {
+			c.logger.Error("Failed to connect", "error", err, "attempt", attempt)
+			transport.Close()
+
+			// 计算退避时间
+			delay := baseDelay * time.Duration(1<<(attempt-1))
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+
+			c.logger.Info("Waiting before retry", "delay", delay)
+
+			select {
+			case <-c.closeChan:
+				c.logger.Info("Client closed during reconnection wait")
+				return false
+			case <-time.After(delay):
+				continue
+			}
+		}
+
+		// 连接成功
+		c.stateMutex.Lock()
+		c.transport = transport
+		c.stateMutex.Unlock()
+
+		// 发送 hello 消息
+		helloMsg := map[string]interface{}{
+			"type":    "hello",
+			"version": 1,
+			"features": map[string]interface{}{
+				"mcp": true,
+			},
+			"transport": c.config.System.Network.Transport,
+			"audio_params": map[string]interface{}{
+				"format":         "opus",
+				"sample_rate":    c.config.Audio.SampleRate,
+				"channels":       c.config.Audio.Channels,
+				"frame_duration": c.config.Audio.FrameDuration,
+			},
+		}
+
+		if err := c.sendJSON(helloMsg); err != nil {
+			c.logger.Error("Failed to send hello message", "error", err)
+			continue
+		}
+
+		c.setState(DeviceStateIdle)
+		c.logger.Info("Reconnection successful", "attempt", attempt)
+		return true
+	}
+
+	c.logger.Error("Reconnection failed after max retries", "maxRetries", maxRetries)
+	return false
 }
 
 // ShowMusicAnimation 显示音乐可视化效果
