@@ -80,8 +80,14 @@ func (k *KeyboardListener) Start() error {
 			case <-k.stopChan:
 				return
 			default:
+				// 设置读取超时，让循环能定期检查 stopChan
+				file.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 				var event KeyEvent
 				if err := binary.Read(file, binary.LittleEndian, &event); err != nil {
+					// 检查是否是超时错误，如果是则继续循环检查 stopChan
+					if os.IsTimeout(err) {
+						continue
+					}
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}
