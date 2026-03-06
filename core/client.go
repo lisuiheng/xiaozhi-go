@@ -534,7 +534,7 @@ func (c *Client) sendJSON(data interface{}) error {
 
 	// 打印发送的 JSON（格式化输出）
 	formattedJSON, _ := json.MarshalIndent(data, "", "  ")
-	fmt.Printf("%s Sending JSON message:\n%s\n", time.Now().Format("2006-01-02 15:04:05"), string(formattedJSON))
+	c.logger.Info("Sending JSON message", "data", string(formattedJSON))
 
 	return c.transport.Send(msg, interfaces.MsgText)
 }
@@ -568,12 +568,13 @@ func (c *Client) messageHandler() {
 				if !ok {
 					// channel 已关闭，尝试重连
 					c.logger.Info("Message channel closed, attempting to reconnect")
-					if !c.reconnect() {
-						// 重连失败，退出
-						c.logger.Error("Reconnection failed, stopping message handler")
-						return
+					if c.reconnect() {
+						// 重连成功，继续处理消息
+						continue
 					}
-					continue
+					// 重连失败，退出消息处理器
+					c.logger.Error("Reconnection failed, stopping message handler")
+					return
 				}
 				switch msg.Type {
 				case interfaces.MsgText: // 文本消息（JSON）
@@ -677,7 +678,7 @@ func (c *Client) handleMessage(msg []byte) error {
 	}
 
 	formattedJSON, _ := json.MarshalIndent(message, "", "  ")
-	fmt.Printf("%s Handling message:\n%s\n", time.Now().Format("2006-01-02 15:04:05"), string(formattedJSON))
+	c.logger.Info("Handling message", "data", string(formattedJSON))
 	switch msgType {
 	case "hello":
 		return c.handleHelloResponse(message)
