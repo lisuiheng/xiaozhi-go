@@ -534,7 +534,7 @@ func (c *Client) sendJSON(data interface{}) error {
 
 	// 打印发送的 JSON（格式化输出）
 	formattedJSON, _ := json.MarshalIndent(data, "", "  ")
-	c.logger.Info("Sending JSON message", "data", string(formattedJSON))
+	c.logger.Info(">>> Sending JSON message >>>\n" + string(formattedJSON))
 
 	return c.transport.Send(msg, interfaces.MsgText)
 }
@@ -650,8 +650,18 @@ func (c *Client) audioSender() {
 		case <-c.closeChan:
 			return
 		case data := <-c.audioSendChan:
+			// 检查 transport 是否存在
+			c.stateMutex.RLock()
+			transport := c.transport
+			c.stateMutex.RUnlock()
+
+			if transport == nil {
+				// transport 已关闭，跳过发送
+				continue
+			}
+
 			if c.audioManager != nil && c.audioManager.IsRecording() {
-				if err := c.transport.Send(data, interfaces.MsgBinary); err != nil {
+				if err := transport.Send(data, interfaces.MsgBinary); err != nil {
 					c.logger.Error("Failed to send audio", "error", err)
 					return
 				}
@@ -678,7 +688,7 @@ func (c *Client) handleMessage(msg []byte) error {
 	}
 
 	formattedJSON, _ := json.MarshalIndent(message, "", "  ")
-	c.logger.Info("Handling message", "data", string(formattedJSON))
+	c.logger.Info("<<< Handling message <<<\n" + string(formattedJSON))
 	switch msgType {
 	case "hello":
 		return c.handleHelloResponse(message)
