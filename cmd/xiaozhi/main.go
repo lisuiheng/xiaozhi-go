@@ -189,6 +189,11 @@ func main() {
 		logger.Info("Context cancelled, shutting down")
 	}
 
+	// 关闭客户端连接（会停止音乐播放等资源）
+	if err := client.Close(); err != nil {
+		logger.Warn("Failed to close client", "error", err)
+	}
+
 	// 停止键盘监听
 	if keyboardListener != nil && keyboardListener.IsRunning() {
 		logger.Info("Stopping keyboard listener")

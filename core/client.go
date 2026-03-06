@@ -373,6 +373,12 @@ func (c *Client) Close() error {
 	c.logger.Info("Closing client connection")
 	close(c.closeChan)
 
+	// 停止音乐播放
+	if c.musicPlayer != nil && c.musicPlayer.IsPlaying() {
+		c.logger.Info("Stopping music before exit")
+		c.musicPlayer.Stop()
+	}
+
 	// 停止音频采集
 	c.StopAudioCapture()
 
