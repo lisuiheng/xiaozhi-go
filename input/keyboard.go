@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/lisuiheng/xiaozhi-go/logger"
 )
 
 const (
@@ -104,8 +106,23 @@ func (k *KeyboardListener) Start() error {
 			event.Code = binary.LittleEndian.Uint16(buffer[18:20])
 			event.Value = int32(binary.LittleEndian.Uint32(buffer[20:24]))
 
+			logger.Debug("Key event received",
+				"type", event.Type,
+				"code", event.Code,
+				"value", event.Value,
+				"ev_key", EV_KEY,
+				"key_release", KEY_RELEASE)
+
 			if event.Type == EV_KEY && event.Value == KEY_RELEASE {
 				now := time.Now()
+				logger.Debug("Key release detected",
+					"code", event.Code,
+					"lastCode", k.lastKeyCode,
+					"lastTime", k.lastKeyTime,
+					"now", now,
+					"doubleTapTime", k.doubleTapTime,
+					"timeDiff", now.Sub(k.lastKeyTime))
+
 				// 检查是否是双击
 				if event.Code == k.lastKeyCode && now.Sub(k.lastKeyTime) < k.doubleTapTime {
 					k.actionFunc("reset")       // 双击重置为初始状态
@@ -117,13 +134,20 @@ func (k *KeyboardListener) Start() error {
 				currentState := k.stateGetter.GetCurrentState()
 				displayMode := k.stateGetter.GetDisplayMode()
 
+				logger.Debug("Processing key action",
+					"currentState", currentState,
+					"displayMode", displayMode)
+
 				// 特殊处理：时钟模式下单击切换回表情模式并唤醒
 				if displayMode == "clock" && (currentState == "idle" || currentState == "disconnected") {
+					logger.Info("Triggering wakeup_from_clock")
 					k.actionFunc("wakeup_from_clock")
 				} else if currentState == "idle" || currentState == "disconnected" {
+					logger.Info("Triggering wakeup")
 					k.actionFunc("wakeup")
 				} else if currentState != "listening" {
 					// 非 idle/listening 状态下，单击触发 interrupt（中断当前操作）
+					logger.Info("Triggering interrupt")
 					k.actionFunc("interrupt")
 				}
 
